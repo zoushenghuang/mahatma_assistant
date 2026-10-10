@@ -1,0 +1,27 @@
+{
+  "name": "fc-mcp-backend",
+  "version": "1.0.0",
+  "description": "Function Calling + MCP Client 完整闭环学习 Demo（纯 Node.js + TypeScript）",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "seed": "tsx src/seed.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langchain/core": "^0.3.80",
+    "@langchain/deepseek": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.7",
+    "langchain": "^0.3.37",
+    "mysql2": "^3.24.4",
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

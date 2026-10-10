@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== 大圣助手 · 全局基础 ===== */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-night font-sans text-ink antialiased;
+  /* 夜巡天庭：深邃背景 + 顶部金箍棒光晕 + 底部红晕 */
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(240, 180, 41, 0.08), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 110%, rgba(229, 72, 77, 0.05), transparent 60%),
+    linear-gradient(180deg, #0a0c12 0%, #0d1018 100%);
+  background-attachment: fixed;
+}
+
+/* 选择文字颜色 */
+::selection {
+  background: rgba(240, 180, 41, 0.3);
+  color: #fff3d6;
+}
+
+/* ===== 滚动条美化 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3142;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4356;
+}
+
+/* ===== 打字机光标 ===== */
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+.stream-caret::after {
+  content: '▍';
+  margin-left: 1px;
+  color: #f0b429;
+  animation: caret-blink 0.9s steps(1) infinite;
+}
+
+/* ===== 尊重系统减弱动效偏好（ui-ux-pro-max 检查清单） ===== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
