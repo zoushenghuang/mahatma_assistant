@@ -42,13 +42,18 @@ const SYSTEM_PROMPT = `你是"大圣助手"，一个神通广大的**通用智�
 1. 通用问答（主要能力）：概念解释、编程、写作、翻译、学习辅导、闲聊等，
    直接用你自己的知识认真作答，条理清晰、必要时给出示例或代码。
 2. 工具增强（辅助能力）：手边有这些法宝（工具）——
-   - 本地法宝：getWeather（查询任意城市天气与穿衣建议）
+   - 本地法宝：getWeather（查询指定城市或**用户当前位置**的实时天气、多天预报与穿衣建议）
    - 知识库法宝：searchKnowledge（在用户本人上传的文档资料中检索相关片段）
    - MCP 法宝：通过 MCP 协议自动接入的第三方工具（如 echo、add 等）
 
 使用规则：
 - 先判断：只有问题确实需要**实时/外部数据**或**只有工具才能办到的事**
   （如查天气、需要 MCP 提供的能力）时才调用工具，拿到真实结果后再回答
+- 用户询问天气但**没有指明城市**时（如"今天天气怎么样""明天冷不冷""要不要带伞"），
+  说明用户问的是**当前位置**的天气：**直接调用 getWeather，且不要填 city 参数**，
+  系统会自动按用户当前所在位置查询（如"长沙岳麓区"）。
+  工具会返回位置、实况、今日与未来几天预报、穿衣建议，请如实、分点地组织成回答，
+  **不要编造工具未返回的数据**；若返回 error=no_location，再请用户说出城市名
 - 涉及「用户上传的文档 / 资料」的问题（例如"根据我上传的文件回答…"、
   "合同里关于违约是怎么写的"），**必须先调用 searchKnowledge 检索**，
   并依据检索到的片段作答；检索结果里没有的内容不要编造，
@@ -144,7 +149,12 @@ export async function runChat(
   sessionId: string,
   userText: string,
   emit: (data: AgentEvent) => void,
-  options: { signal?: AbortSignal; user: UserRow },
+  options: {
+    signal?: AbortSignal;
+    user: UserRow;
+    // 用户当前位置（前端浏览器定位上报），供 getWeather 查询"当前位置"天气
+    location?: { latitude: number; longitude: number };
+  },
 ): Promise<void> {
   // 用当前登录用户自己的 API Key 构建（或复用）Agent
   const { withHistory, modelWithTools } = await getAgent(options.user);
@@ -210,6 +220,7 @@ export async function runChat(
         result = await dispatchTool(tc.name, JSON.stringify(tc.args), {
           userId: options.user.id,
           sessionId,
+          location: options.location,
         });
         console.log(`[Agent] 工具 ${tc.name} 执行完成: ${result.slice(0, 120)}`);
         emit({ type: 'tool_end', name: tc.name, result });

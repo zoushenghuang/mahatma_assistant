@@ -36,6 +36,8 @@ export interface OpenAITool {
 export interface ToolContext {
   userId: string;
   sessionId?: string;
+  // 用户当前所在位置（由前端浏览器定位上报），供获取当前位置天气等工具使用
+  location?: { latitude: number; longitude: number };
 }
 
 // 一次对话消耗的 token 用量（由上游模型返回的 usage 汇总而来）

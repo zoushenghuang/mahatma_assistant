@@ -5,6 +5,7 @@ import {
   getToken,
   setUnauthorizedHandler,
   type ApiKeyStatus,
+  type GeoLocation,
   type Session,
   type SseEvent,
   type TokenUsage,
@@ -336,6 +337,35 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // ===== 浏览器定位：获取用户当前位置，用于查询"当前位置天气" =====
+  // 缓存 + 只尝试一次：避免每条消息都弹定位授权；用户拒绝后静默降级为不定位
+  const locationRef = useRef<GeoLocation | null>(null);
+  const locationTriedRef = useRef(false);
+  const locationPromiseRef = useRef<Promise<GeoLocation | null> | null>(null);
+
+  /** 获取当前位置（未授权 / 失败 / 超时返回 null，不阻塞对话） */
+  const getLocation = useCallback((): Promise<GeoLocation | null> => {
+    if (locationRef.current) return Promise.resolve(locationRef.current);
+    if (locationTriedRef.current || typeof navigator === 'undefined' || !navigator.geolocation) {
+      return Promise.resolve(null);
+    }
+    if (!locationPromiseRef.current) {
+      locationTriedRef.current = true;
+      locationPromiseRef.current = new Promise<GeoLocation | null>((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+            locationRef.current = loc;
+            resolve(loc);
+          },
+          () => resolve(null), // 拒绝 / 超时 / 不可用：静默降级
+          { timeout: 5000, maximumAge: 10 * 60 * 1000 },
+        );
+      });
+    }
+    return locationPromiseRef.current;
+  }, []);
+
   // ===== 会话管理 =====
 
   /** 刷新会话列表（新建/删除/对话后调用） */
@@ -545,9 +575,11 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
     setInput('');
     const target = sid;
+    // 附带当前位置，供后端查询"当前位置天气"（未授权则为 null，不影响普通对话）
+    const location = await getLocation();
     await streamTurn(
       (prev) => [...prev, { role: 'user', content: text }],
-      (signal) => api.chatSSE(target, text, handleEvent, signal),
+      (signal) => api.chatSSE(target, text, location, handleEvent, signal),
     );
   };
 
@@ -563,9 +595,10 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     if (lastUser < 0) return;
     setEditingIndex(null);
     setEditText('');
+    const location = await getLocation();
     await streamTurn(
       (prev) => prev.slice(0, lastUser + 1),
-      (signal) => api.regenerateSSE(sid, handleEvent, signal),
+      (signal) => api.regenerateSSE(sid, location, handleEvent, signal),
     );
   };
 
@@ -577,9 +610,10 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     const serverIndex = toServerIndex(messages, frontIndex);
     setEditingIndex(null);
     setEditText('');
+    const location = await getLocation();
     await streamTurn(
       (prev) => [...prev.slice(0, frontIndex), { role: 'user', content: text }],
-      (signal) => api.editMessageSSE(sid, serverIndex, text, handleEvent, signal),
+      (signal) => api.editMessageSSE(sid, serverIndex, text, location, handleEvent, signal),
     );
   };
 

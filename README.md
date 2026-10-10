@@ -10,7 +10,7 @@
 - **流式对话**：后端 SSE 逐 token 推送，前端边生成边渲染，可随时中断
 - **Markdown 与代码高亮**：回答实时渲染 Markdown（标题 / 列表 / 表格 / 引用 / 链接），代码块语法高亮并支持一键复制，配色随浅色 / 深色主题切换
 - **重新生成 / 编辑重发**：对回答可重新生成，对提问可就地编辑后重发；后端会丢弃该消息之后的记录再重跑，保证上下文不被污染
-- **Function Calling**：内置本地工具 `getWeather`（查天气 + 穿衣建议），工具调用过程在界面上以卡片展示
+- **真实天气 + 定位**：内置本地工具 `getWeather`，可直接查询**用户当前位置**（如「长沙岳麓区」）或指定城市的实时天气、多天预报与穿衣建议；位置由浏览器 `geolocation` 上报，天气数据源支持高德（配置 `AMAP_KEY`）或 Open-Meteo（免 Key 自动兜底），工具调用过程在界面上以卡片展示
 - **MCP 集成**：启动时通过 stdio 拉起 `server-everything` 子进程，自动发现第三方工具并转成 OpenAI 工具格式，与本地工具一起交给模型
 - **知识库 RAG**：上传 `txt / md / json / csv / pdf / docx` 等文档，后端解析文本并切分为片段存入 MySQL；对话时模型通过 `searchKnowledge` 工具检索相关片段作答，文档与检索结果严格按用户隔离
 - **用量可视**：每轮对话结束展示本次消耗的 token（含工具循环多轮请求的累加值，悬停可看输入/输出明细）
@@ -33,6 +33,7 @@ backend/
   src/
     index.ts        # 入口：建表 → 连 MCP → 初始化 Agent → 起服务 → 优雅退出
     config.ts       # 环境变量集中管理
+    weather.ts      # 真实天气与定位（高德 / Open-Meteo 双数据源）
     server.ts       # HTTP 路由与 SSE 对话接口
     auth.ts         # 注册/登录/找回密码 + JWT
     db.ts           # MySQL 数据层（users / sessions / messages / documents / doc_chunks）
@@ -77,6 +78,7 @@ cp .env.example .env   # 然后按需修改
 | `AUTH_SECRET` | JWT 签名密钥，**生产必须修改** | 开发默认值 |
 | `MYSQL_*` | MySQL 主机 / 端口 / 用户 / 密码 / 库名 | 127.0.0.1:3306 / agent_demo |
 | `MOCK_LLM` | 设为 `1` 开启 Mock 模式，无需 Key | 不开启 |
+| `AMAP_KEY` | 高德地图 Web 服务 Key，配置后天气 / 定位走高德（国内更稳、可精确到区县） | 空（自动降级为免 Key 方案） |
 
 ### 3. 启动
 
@@ -113,13 +115,15 @@ cd frontend && npm run build      # 前端构建
 - `GET /api/sessions`、`POST /api/sessions`、`DELETE /api/sessions/:id`
 - `GET /api/sessions/:id/messages`
 - `GET /api/documents`、`POST /api/documents`（body: `{ filename, mime, data(base64) }`）、`DELETE /api/documents/:id`
-- `POST /api/chat`（SSE，body: `{ sessionId, message }`）
+- `POST /api/chat`（SSE，body: `{ sessionId, message, location? }`；`location` 为浏览器上报的当前位置 `{ latitude, longitude }`，用于查询当前位置天气）
 
 ## 注意事项
 
 - 本项目为学习 / 演示用途，`AUTH_SECRET` 在生产环境必须替换为随机长字符串。
 - 用户的 API Key 加密存储且只用于本人会话，服务端不再持有全局 Key。
 - `backend/data/` 下的数据库文件为本地运行产物，不需要提交。
+- 天气功能依赖浏览器定位：`navigator.geolocation` 仅在 `localhost` 或 **HTTPS** 页面可用；用户拒绝授权或环境不支持时，助手会改为询问城市名。
+- 未配置 `AMAP_KEY` 时，定位与天气自动使用 Open-Meteo / OpenStreetMap（均免 Key）；如需更稳定的国内访问与区县级精度，建议申请高德 Web 服务 Key。
 
 ② 流式 Markdown/代码高亮 + 重新生成/编辑重发（体验刚需，性价比最高）
 ③ 多 MCP Server 接入 + 管理界面（把"自动发现工具"这个亮点做实）

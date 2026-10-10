@@ -33,7 +33,7 @@ export function isApiKeyRequired(): boolean {
 export function createModel(apiKey?: string | null): BaseChatModel {
   if (MOCK_MODE) {
     return new FakeToolCallingChatModel({
-      responses: ['（模拟回复）大圣已为你查得：长沙今日阴转小雨，气温 6°C，建议穿棉袄。'],
+      responses: ['（模拟回复）大圣已为你查得当前位置的实时天气，详情见上方法宝返回。'],
     });
   }
 

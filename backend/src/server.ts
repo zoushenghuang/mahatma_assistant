@@ -231,6 +231,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   const regenMatch = url.pathname.match(/^\/api\/sessions\/([\w-]+)\/regenerate$/);
   if (req.method === 'POST' && regenMatch) {
     const sessionId = regenMatch[1];
+    const body = await readJson(req).catch(() => ({}));
     if (!(await getSession(sessionId, user!.id))) {
       sendJson(res, 404, { error: '会话不存在或无权限' });
       return;
@@ -246,7 +247,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
     // 截断该用户消息及其之后的所有消息（含回答与工具消息），再用原文重跑
     const removed = await truncateFromDisplayIndex(sessionId, lastUserIndex);
-    await streamChat(req, res, user!, sessionId, removed!.content);
+    await streamChat(req, res, user!, sessionId, removed!.content, parseLocation(body));
     return;
   }
 
@@ -278,7 +279,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
     await truncateFromDisplayIndex(sessionId, displayIndex);
-    await streamChat(req, res, user!, sessionId, message);
+    await streamChat(req, res, user!, sessionId, message, parseLocation(body));
     return;
   }
 
@@ -324,6 +325,18 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   res.end('Not Found');
 }
 
+/**
+ * 解析前端上报的当前位置坐标
+ * （用户授权浏览器定位后附带；缺省或非法值一律忽略，不影响普通对话）
+ */
+function parseLocation(body: any): { latitude: number; longitude: number } | undefined {
+  const latitude = Number(body?.location?.latitude);
+  const longitude = Number(body?.location?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return undefined;
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return undefined;
+  return { latitude, longitude };
+}
+
 async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, user: UserRow) {
   const body = await readJson(req).catch(() => ({}));
   const sessionId: string = body?.sessionId ?? '';
@@ -345,7 +358,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, u
     return;
   }
 
-  await streamChat(req, res, user, sessionId, message.trim());
+  await streamChat(req, res, user, sessionId, message.trim(), parseLocation(body));
 }
 
 /**
@@ -358,6 +371,7 @@ async function streamChat(
   user: UserRow,
   sessionId: string,
   message: string,
+  location?: { latitude: number; longitude: number },
 ) {
   // SSE 响应头（关键节点：SSE —— 告诉浏览器这是事件流，不要缓冲）
   res.writeHead(200, {
@@ -380,7 +394,7 @@ async function streamChat(
     const beforeCount = (await getDisplayMessages(sessionId)).length;
 
     // 关键节点：LangChain —— 进入带记忆的 Agent 流式对话
-    await runChat(sessionId, message, emit, { signal: controller.signal, user });
+    await runChat(sessionId, message, emit, { signal: controller.signal, user, location });
 
     // 新会话的首条消息 → 用消息内容生成标题（列表页可读性）
     if (beforeCount === 0) {

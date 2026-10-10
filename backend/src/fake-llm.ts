@@ -48,7 +48,8 @@ export class FakeToolCallingChatModel extends BaseChatModel<BaseChatModelCallOpt
     const lastIsHuman = last?._getType() === 'human';
     if (tools && tools.length > 0 && lastIsHuman) {
       const name = tools[0].name;
-      const args = name === 'getWeather' ? { city: '长沙' } : {};
+      // getWeather 不填 city → 使用用户当前位置（与真实模型的默认行为保持一致）
+      const args = {};
       return {
         generations: [
           {

@@ -12,6 +12,10 @@ export const config = {
   model: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
   port: Number(process.env.PORT ?? 3001),
 
+  // 高德地图 Web 服务 Key（可选）：配置后天气 / 定位走高德（国内稳定、区县精准）；
+  // 不配置则自动降级为 Open-Meteo + BigDataCloud 的免 Key 方案
+  amapKey: process.env.AMAP_KEY ?? '',
+
   // JWT 签名密钥（生产环境务必通过环境变量覆盖）
   authSecret: process.env.AUTH_SECRET ?? 'dev-secret-please-change-me',
 

@@ -36,6 +36,12 @@ export interface ApiKeyStatus {
   required: boolean;
 }
 
+/** 用户当前位置坐标（浏览器定位后随对话请求上报） */
+export interface GeoLocation {
+  latitude: number;
+  longitude: number;
+}
+
 /** 知识库文档（RAG 数据源） */
 export interface KnowledgeDoc {
   id: string;
@@ -247,18 +253,20 @@ export const api = {
   chatSSE: (
     sessionId: string,
     message: string,
+    location: GeoLocation | null,
     onEvent: (e: SseEvent) => void,
     signal: AbortSignal,
-  ) => streamSse(`${BASE}/chat`, { sessionId, message }, onEvent, signal),
+  ) => streamSse(`${BASE}/chat`, { sessionId, message, location }, onEvent, signal),
 
   /**
    * 重新生成（SSE）：后端丢弃最后一条回答及其后的记录，用上一条用户消息重跑
    */
   regenerateSSE: (
     sessionId: string,
+    location: GeoLocation | null,
     onEvent: (e: SseEvent) => void,
     signal: AbortSignal,
-  ) => streamSse(`${BASE}/sessions/${sessionId}/regenerate`, {}, onEvent, signal),
+  ) => streamSse(`${BASE}/sessions/${sessionId}/regenerate`, { location }, onEvent, signal),
 
   /**
    * 编辑重发（SSE）：把第 displayIndex 条用户消息改成新内容，并丢弃其后所有消息重跑
@@ -267,7 +275,9 @@ export const api = {
     sessionId: string,
     displayIndex: number,
     message: string,
+    location: GeoLocation | null,
     onEvent: (e: SseEvent) => void,
     signal: AbortSignal,
-  ) => streamSse(`${BASE}/sessions/${sessionId}/edit`, { displayIndex, message }, onEvent, signal),
+  ) =>
+    streamSse(`${BASE}/sessions/${sessionId}/edit`, { displayIndex, message, location }, onEvent, signal),
 };
