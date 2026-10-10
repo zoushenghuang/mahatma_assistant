@@ -334,11 +334,13 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
     const handleEvent = (e: SseEvent) => {
       if (e.type === 'content') {
+        // 注意：更新函数必须是纯函数（StrictMode 下会被调用两次），
+        // 所以不能改旧对象，要新建「最后一条消息」再替换
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
           if (last && last.role === 'assistant') {
-            last.content += e.text;
+            next[next.length - 1] = { ...last, content: last.content + e.text };
           } else {
             next.push({ role: 'assistant', content: e.text });
           }
@@ -350,7 +352,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         setToolLog((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
-          if (last) last.result = e.result;
+          if (last) next[next.length - 1] = { ...last, result: e.result };
           return next;
         });
       } else if (e.type === 'error') {
@@ -359,7 +361,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           setToolLog((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
-            if (last) last.error = e.message;
+            if (last) next[next.length - 1] = { ...last, error: e.message };
             else next.push({ name: '工具', error: e.message });
             return next;
           });
