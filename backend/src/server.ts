@@ -7,6 +7,7 @@ import {
   deleteDocument,
   deleteSession,
   finalizeDocument,
+  getDisplayRows,
   getSession,
   getUserApiKey,
   insertChunks,
@@ -14,6 +15,7 @@ import {
   listSessions,
   setUserApiKey,
   touchSession,
+  truncateFromDisplayIndex,
   updateSessionTitle,
   type UserRow,
 } from './db';
@@ -52,6 +54,8 @@ import type { AgentEvent } from './types';
  * - POST   /api/sessions                 新建会话
  * - DELETE /api/sessions/:id             删除会话（级联删消息）
  * - GET    /api/sessions/:id/messages    会话消息（前端切换会话时加载）
+ * - POST   /api/sessions/:id/regenerate  重新生成（丢弃最后一条回答，用上一条用户消息重跑）
+ * - POST   /api/sessions/:id/edit        编辑重发（body: { displayIndex, message }）
  * - GET    /api/documents                我的知识库文档列表
  * - POST   /api/documents                上传文档（body: { filename, mime, data(base64) }）
  * - DELETE /api/documents/:id            删除文档（级联删分块）
@@ -221,6 +225,63 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // ===== 重新生成 / 编辑重发（都是「截断历史 + 重新流式」）=====
+
+  // 重新生成：丢掉最后一条回答，用上一条用户消息重跑
+  const regenMatch = url.pathname.match(/^\/api\/sessions\/([\w-]+)\/regenerate$/);
+  if (req.method === 'POST' && regenMatch) {
+    const sessionId = regenMatch[1];
+    if (!(await getSession(sessionId, user!.id))) {
+      sendJson(res, 404, { error: '会话不存在或无权限' });
+      return;
+    }
+    const display = await getDisplayRows(sessionId);
+    let lastUserIndex = -1;
+    display.forEach((m, i) => {
+      if (m.role === 'human') lastUserIndex = i;
+    });
+    if (lastUserIndex < 0) {
+      sendJson(res, 400, { error: '还没有可重新生成的消息' });
+      return;
+    }
+    // 截断该用户消息及其之后的所有消息（含回答与工具消息），再用原文重跑
+    const removed = await truncateFromDisplayIndex(sessionId, lastUserIndex);
+    await streamChat(req, res, user!, sessionId, removed!.content);
+    return;
+  }
+
+  // 编辑重发：把某条用户消息改成新内容重跑（其后消息一并丢弃）
+  const editMatch = url.pathname.match(/^\/api\/sessions\/([\w-]+)\/edit$/);
+  if (req.method === 'POST' && editMatch) {
+    const sessionId = editMatch[1];
+    const body = await readJson(req).catch(() => ({}));
+    const displayIndex = Number(body?.displayIndex);
+    const message = String(body?.message ?? '').trim();
+
+    if (!(await getSession(sessionId, user!.id))) {
+      sendJson(res, 404, { error: '会话不存在或无权限' });
+      return;
+    }
+    if (!Number.isInteger(displayIndex) || displayIndex < 0) {
+      sendJson(res, 400, { error: '消息序号不合法' });
+      return;
+    }
+    if (!message) {
+      sendJson(res, 400, { error: '消息内容不能为空' });
+      return;
+    }
+    // 只允许编辑「用户消息」，避免把助手的回答当成提问
+    const display = await getDisplayRows(sessionId);
+    const target = display[displayIndex];
+    if (!target || target.role !== 'human') {
+      sendJson(res, 400, { error: '只能编辑用户消息' });
+      return;
+    }
+    await truncateFromDisplayIndex(sessionId, displayIndex);
+    await streamChat(req, res, user!, sessionId, message);
+    return;
+  }
+
   // ===== 知识库（RAG）：文档上传 / 列表 / 删除 =====
 
   // 文档列表
@@ -284,6 +345,20 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, u
     return;
   }
 
+  await streamChat(req, res, user, sessionId, message.trim());
+}
+
+/**
+ * 公共流式对话：建立 SSE → 跑 Agent → 收尾（标题 / 活跃时间）
+ * 供「发送消息 / 重新生成 / 编辑重发」三条链路复用。
+ */
+async function streamChat(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  user: UserRow,
+  sessionId: string,
+  message: string,
+) {
   // SSE 响应头（关键节点：SSE —— 告诉浏览器这是事件流，不要缓冲）
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -305,7 +380,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, u
     const beforeCount = (await getDisplayMessages(sessionId)).length;
 
     // 关键节点：LangChain —— 进入带记忆的 Agent 流式对话
-    await runChat(sessionId, message.trim(), emit, { signal: controller.signal, user });
+    await runChat(sessionId, message, emit, { signal: controller.signal, user });
 
     // 新会话的首条消息 → 用消息内容生成标题（列表页可读性）
     if (beforeCount === 0) {

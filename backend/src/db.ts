@@ -586,6 +586,41 @@ export async function getMessagesBySession(sessionId: string): Promise<MessageRo
   }));
 }
 
+// ============ 消息截断（供「重新生成 / 编辑重发」使用）============
+
+/** 展示用消息：只含 user/assistant 的纯文本，与前端消息列表一一对应，并带原始行 id */
+export interface DisplayRow {
+  id: number;
+  role: 'human' | 'ai';
+  content: string;
+}
+
+/** 取展示用消息（带 id），顺序与前端一致 */
+export async function getDisplayRows(sessionId: string): Promise<DisplayRow[]> {
+  const rows = await getMessagesBySession(sessionId);
+  return rows
+    .filter((m) => (m.role === 'human' || m.role === 'ai') && m.content)
+    .map((m) => ({ id: m.id, role: m.role as 'human' | 'ai', content: m.content as string }));
+}
+
+/**
+ * 从第 displayIndex 条展示消息开始截断（含自身）：删除它及其之后的全部消息
+ * （连带 tool 消息），用于重新生成 / 编辑重发。
+ *
+ * 依赖 messages.id 自增有序，因此 `id >= 目标行 id` 即「该条及之后」。
+ * @returns 被删除的那条展示消息（调用方据此拿到原文重发），越界时返回 undefined
+ */
+export async function truncateFromDisplayIndex(
+  sessionId: string,
+  displayIndex: number,
+): Promise<DisplayRow | undefined> {
+  const display = await getDisplayRows(sessionId);
+  const target = display[displayIndex];
+  if (!target) return undefined;
+  await pool.query(`DELETE FROM messages WHERE session_id = ? AND id >= ?`, [sessionId, target.id]);
+  return target;
+}
+
 // ============ 知识库（RAG）：文档 CRUD ============
 
 /** 文档行（对外） */

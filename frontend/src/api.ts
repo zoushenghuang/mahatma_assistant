@@ -126,6 +126,59 @@ function post<T>(url: string, body: unknown): Promise<T> {
   });
 }
 
+/**
+ * 通用 SSE 流式请求：
+ * 用 fetch + ReadableStream 逐行解析 "data: {json}" 事件，
+ * 替代 EventSource（EventSource 只支持 GET）。
+ * 发送消息 / 重新生成 / 编辑重发三条链路共用。
+ */
+async function streamSse(
+  url: string,
+  body: unknown,
+  onEvent: (e: SseEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body ?? {}),
+    signal,
+  });
+  if (resp.status === 401) {
+    clearToken();
+    unauthorizedHandler?.();
+    throw new Error('登录已失效，请重新登录');
+  }
+  if (!resp.ok || !resp.body) {
+    throw new Error(await readError(resp));
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // SSE 事件以空行分隔，每行 "data: {json}"
+    const parts = buf.split('\n\n');
+    buf = parts.pop() ?? '';
+    for (const part of parts) {
+      for (const line of part.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6)) as SseEvent;
+          onEvent(data);
+        } catch {
+          // 忽略无法解析的行
+        }
+      }
+    }
+  }
+}
+
 export const api = {
   // ===== 用户模块 =====
 
@@ -189,54 +242,32 @@ export const api = {
     json<{ ok: boolean }>(`${BASE}/documents/${id}`, { method: 'DELETE' }),
 
   /**
-   * 流式对话（POST + SSE）：
-   * 用 fetch + ReadableStream 逐行解析 "data: {json}" 事件，
-   * 替代 EventSource（EventSource 只支持 GET）
+   * 流式对话（POST + SSE）
    */
-  async chatSSE(
+  chatSSE: (
     sessionId: string,
     message: string,
     onEvent: (e: SseEvent) => void,
     signal: AbortSignal,
-  ): Promise<void> {
-    const resp = await fetch(`${BASE}/chat`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ sessionId, message }),
-      signal,
-    });
-    if (resp.status === 401) {
-      clearToken();
-      unauthorizedHandler?.();
-      throw new Error('登录已失效，请重新登录');
-    }
-    if (!resp.ok || !resp.body) {
-      throw new Error(await readError(resp));
-    }
+  ) => streamSse(`${BASE}/chat`, { sessionId, message }, onEvent, signal),
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
+  /**
+   * 重新生成（SSE）：后端丢弃最后一条回答及其后的记录，用上一条用户消息重跑
+   */
+  regenerateSSE: (
+    sessionId: string,
+    onEvent: (e: SseEvent) => void,
+    signal: AbortSignal,
+  ) => streamSse(`${BASE}/sessions/${sessionId}/regenerate`, {}, onEvent, signal),
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-
-      // SSE 事件以空行分隔，每行 "data: {json}"
-      const parts = buf.split('\n\n');
-      buf = parts.pop() ?? '';
-      for (const part of parts) {
-        for (const line of part.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const data = JSON.parse(line.slice(6)) as SseEvent;
-            onEvent(data);
-          } catch {
-            // 忽略无法解析的行
-          }
-        }
-      }
-    }
-  },
+  /**
+   * 编辑重发（SSE）：把第 displayIndex 条用户消息改成新内容，并丢弃其后所有消息重跑
+   */
+  editMessageSSE: (
+    sessionId: string,
+    displayIndex: number,
+    message: string,
+    onEvent: (e: SseEvent) => void,
+    signal: AbortSignal,
+  ) => streamSse(`${BASE}/sessions/${sessionId}/edit`, { displayIndex, message }, onEvent, signal),
 };

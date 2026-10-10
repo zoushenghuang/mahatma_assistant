@@ -38,6 +38,16 @@
   --scrollbar-thumb-hover: #3a4356;
   --selection-bg: rgba(240, 180, 41, 0.3);
   --selection-fg: #fff3d6;
+
+  /* 代码高亮令牌色（highlight.js） */
+  --hl-comment: #5f6779;
+  --hl-keyword: #f0b429;
+  --hl-string: #9ece6a;
+  --hl-number: #ff9e64;
+  --hl-function: #7aa2f7;
+  --hl-attr: #7dcfff;
+  --hl-title: #e0af68;
+  --hl-builtin: #bb9af7;
 }
 
 /* 浅色：云雾白底 + 金晕点缀，保持同一套设计语言 */
@@ -70,6 +80,16 @@
   --scrollbar-thumb-hover: #aeb5c9;
   --selection-bg: rgba(240, 180, 41, 0.35);
   --selection-fg: #3a2a00;
+
+  /* 浅色下的高亮令牌色：整体加深，保证白底可读 */
+  --hl-comment: #8a90a2;
+  --hl-keyword: #9a6700;
+  --hl-string: #2f7d31;
+  --hl-number: #b35c00;
+  --hl-function: #2b5fb8;
+  --hl-attr: #0f6f8a;
+  --hl-title: #8a5a00;
+  --hl-builtin: #7a3fb8;
 }
 
 /* ===== 全局基础 ===== */
@@ -134,4 +154,151 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ===== Markdown 正文排版 ===== */
+.markdown {
+  @apply text-sm leading-relaxed;
+  overflow-wrap: anywhere;
+}
+.markdown > *:first-child {
+  margin-top: 0;
+}
+.markdown > *:last-child {
+  margin-bottom: 0;
+}
+.markdown p {
+  margin: 0.6em 0;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  @apply font-display font-bold text-gold-100;
+  margin: 1.1em 0 0.5em;
+  line-height: 1.4;
+}
+.markdown h1 {
+  font-size: 1.22rem;
+}
+.markdown h2 {
+  font-size: 1.1rem;
+}
+.markdown h3 {
+  font-size: 1rem;
+}
+.markdown ul,
+.markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown li {
+  margin: 0.25em 0;
+}
+.markdown li::marker {
+  @apply text-gold;
+}
+.markdown blockquote {
+  @apply border-l-2 border-gold/50 pl-3 text-ink-muted;
+  margin: 0.75em 0;
+}
+.markdown hr {
+  @apply border-night-600;
+  margin: 1em 0;
+}
+.markdown a {
+  @apply text-gold underline underline-offset-2;
+}
+.markdown strong {
+  @apply font-semibold text-ink;
+}
+.markdown em {
+  font-style: italic;
+}
+.markdown del {
+  @apply opacity-60;
+}
+/* 行内代码（块级代码由 pre code 重置） */
+.markdown code {
+  @apply rounded bg-night-700/70 px-1.5 py-0.5 font-mono text-[0.85em] text-gold-100;
+}
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+  color: rgb(var(--c-ink));
+  font-size: inherit;
+}
+.markdown table {
+  @apply w-full border-collapse text-xs;
+}
+.markdown th,
+.markdown td {
+  @apply border border-night-600 px-2.5 py-1.5 text-left align-top;
+}
+.markdown th {
+  @apply bg-night-700/60 font-medium text-ink;
+}
+
+/* ===== 代码高亮令牌（highlight.js → 主题色） ===== */
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type,
+.hljs-doctag {
+  color: var(--hl-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-template-tag {
+  color: var(--hl-string);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--hl-number);
+}
+.hljs-function,
+.hljs-title.function_,
+.hljs-title.function {
+  color: var(--hl-function);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-params {
+  color: var(--hl-attr);
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-pseudo {
+  color: var(--hl-title);
+}
+.hljs-built_in,
+.hljs-class,
+.hljs-meta,
+.hljs-tag {
+  color: var(--hl-builtin);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 700;
 }

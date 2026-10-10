@@ -13,6 +13,7 @@ import {
 import AuthPage from './AuthPage';
 import ApiKeyDialog, { KeyIcon } from './ApiKeyDialog';
 import KnowledgeDialog, { BookIcon } from './KnowledgeDialog';
+import Markdown, { CopyButton } from './Markdown';
 import SettingsDialog from './SettingsDialog';
 import { useSettings, type Translate } from './settings';
 
@@ -24,6 +25,17 @@ interface ChatMsg {
   content: string;
   // 该条助手消息是失败提示（Key 无效 / 网络异常等），用警示样式渲染
   failed?: boolean;
+  // 仅存在于前端、后端没有记录的消息（失败提示 / 中断残留），
+  // 计算「重新生成 / 编辑重发」的后端索引时需要跳过它们
+  local?: boolean;
+}
+
+/**
+ * 前端消息索引 → 后端展示消息索引
+ * （跳过 failed / local 这类只在浏览器里存在的消息，保证与数据库一一对应）
+ */
+function toServerIndex(list: ChatMsg[], frontIndex: number): number {
+  return list.slice(0, frontIndex).filter((m) => !m.local && !m.failed).length;
 }
 
 // 工具调用日志（结构化，便于卡片化展示）
@@ -135,6 +147,46 @@ function ChevronIcon({ open, className = 'h-4 w-4' }: { open: boolean; className
       aria-hidden="true"
     >
       <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+/** 铅笔 · 编辑消息 */
+function EditIcon({ className = 'h-3.5 w-3.5' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+  );
+}
+
+/** 循环箭头 · 重新生成 */
+function RefreshIcon({ className = 'h-3.5 w-3.5' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+      <path d="M3 21v-5h5" />
     </svg>
   );
 }
@@ -278,6 +330,8 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [toolLog, setToolLog] = useState<ToolLogItem[]>([]);
   const [toolOpen, setToolOpen] = useState(true);
   const [turnUsage, setTurnUsage] = useState<TokenUsage | null>(null); // 本轮 token 用量
+  const [editingIndex, setEditingIndex] = useState<number | null>(null); // 正在编辑的用户消息下标
+  const [editText, setEditText] = useState('');
   const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false); // 移动端会话抽屉
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -299,6 +353,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setActiveSessionId(id);
     setToolLog([]);
     setTurnUsage(null);
+    setEditingIndex(null);
     setStreaming(false);
     try {
       const history = await api.getMessages(id);
@@ -315,6 +370,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setMessages([]);
     setToolLog([]);
     setTurnUsage(null);
+    setEditingIndex(null);
     setStreaming(false);
     setInput('');
     try {
@@ -346,6 +402,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           setMessages([]);
           setToolLog([]);
           setTurnUsage(null);
+          setEditingIndex(null);
           setStreaming(false);
         }
       }
@@ -375,34 +432,9 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   // ===== 对话 =====
 
-  const send = async (prefill?: string) => {
-    const text = (prefill ?? input).trim();
-    if (!text || streaming) return;
-
-    // 没有当前会话时先自动新建
-    let sid = activeSessionId;
-    if (!sid) {
-      try {
-        const s = await api.createSession();
-        sid = s.id;
-        setActiveSessionId(s.id);
-        setSessions((prev) => [s, ...prev]);
-      } catch {
-        return;
-      }
-    }
-
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
-    setInput('');
-    setStreaming(true);
-    setToolLog([]);
-    setTurnUsage(null);
-    setToolOpen(true);
-
-    const ac = new AbortController();
-    abortRef.current = ac;
-
-    const handleEvent = (e: SseEvent) => {
+  /** 处理一轮 SSE 事件（发送 / 重新生成 / 编辑重发共用） */
+  const handleEvent = useCallback(
+    (e: SseEvent) => {
       if (e.type === 'content') {
         // 注意：更新函数必须是纯函数（StrictMode 下会被调用两次），
         // 所以不能改旧对象，要新建「最后一条消息」再替换
@@ -446,37 +478,122 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           const last = next[next.length - 1];
           if (last && last.role === 'assistant') {
             // 已流式输出一半才失败：用完整文案覆盖，避免留在半截内容
-            next[next.length - 1] = { role: 'assistant', content: e.message, failed: true };
+            next[next.length - 1] = { role: 'assistant', content: e.message, failed: true, local: true };
           } else {
-            next.push({ role: 'assistant', content: e.message, failed: true });
+            next.push({ role: 'assistant', content: e.message, failed: true, local: true });
           }
           return next;
         });
       }
-    };
+    },
+    [t],
+  );
 
-    try {
-      await api.chatSSE(sid, text, handleEvent, ac.signal);
-    } catch (err: any) {
-      if (err?.name !== 'AbortError') {
-        console.error('对话失败:', err);
-        // 连接层异常也用助手消息展示，界面不再出现「系统出错」字样
-        setMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: friendlyClientError(err, t), failed: true },
-        ]);
+  /**
+   * 统一的「一轮对话」执行器：发送 / 重新生成 / 编辑重发共用
+   * @param prepare 本地消息列表变更（截断 + 追加用户消息）
+   * @param request 发起 SSE 请求
+   */
+  const streamTurn = useCallback(
+    async (
+      prepare: (prev: ChatMsg[]) => ChatMsg[],
+      request: (signal: AbortSignal) => Promise<void>,
+    ) => {
+      setMessages(prepare);
+      setStreaming(true);
+      setToolLog([]);
+      setTurnUsage(null);
+      setToolOpen(true);
+
+      const ac = new AbortController();
+      abortRef.current = ac;
+      try {
+        await request(ac.signal);
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          console.error('对话失败:', err);
+          // 连接层异常也用助手消息展示，界面不再出现「系统出错」字样
+          setMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: friendlyClientError(err, t), failed: true, local: true },
+          ]);
+        }
+      } finally {
+        setStreaming(false);
+        abortRef.current = null;
+        refreshSessions(); // 标题 / 排序可能变化
       }
-    } finally {
-      setStreaming(false);
-      abortRef.current = null;
-      refreshSessions(); // 标题 / 排序可能变化
+    },
+    [handleEvent, refreshSessions, t],
+  );
+
+  const send = async (prefill?: string) => {
+    const text = (prefill ?? input).trim();
+    if (!text || streaming) return;
+
+    // 没有当前会话时先自动新建
+    let sid = activeSessionId;
+    if (!sid) {
+      try {
+        const s = await api.createSession();
+        sid = s.id;
+        setActiveSessionId(s.id);
+        setSessions((prev) => [s, ...prev]);
+      } catch {
+        return;
+      }
     }
+    setInput('');
+    const target = sid;
+    await streamTurn(
+      (prev) => [...prev, { role: 'user', content: text }],
+      (signal) => api.chatSSE(target, text, handleEvent, signal),
+    );
+  };
+
+  /** 重新生成最后一条回答（后端会丢弃该回答及其后记录） */
+  const regenerate = async () => {
+    const sid = activeSessionId;
+    if (!sid || streaming) return;
+    // 找到最后一条「后端确有记录」的用户消息，本地先截断到它
+    let lastUser = -1;
+    messages.forEach((m, i) => {
+      if (m.role === 'user' && !m.local) lastUser = i;
+    });
+    if (lastUser < 0) return;
+    setEditingIndex(null);
+    setEditText('');
+    await streamTurn(
+      (prev) => prev.slice(0, lastUser + 1),
+      (signal) => api.regenerateSSE(sid, handleEvent, signal),
+    );
+  };
+
+  /** 提交编辑并重发（丢弃该条之后的全部对话） */
+  const submitEdit = async (frontIndex: number) => {
+    const sid = activeSessionId;
+    const text = editText.trim();
+    if (!sid || !text || streaming) return;
+    const serverIndex = toServerIndex(messages, frontIndex);
+    setEditingIndex(null);
+    setEditText('');
+    await streamTurn(
+      (prev) => [...prev.slice(0, frontIndex), { role: 'user', content: text }],
+      (signal) => api.editMessageSSE(sid, serverIndex, text, handleEvent, signal),
+    );
   };
 
   /** 停止生成 */
   const stop = () => {
     abortRef.current?.abort();
     setStreaming(false);
+    // 中断的回答未必已落库，标记为本地消息，避免影响后续索引计算
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.role === 'assistant') next[next.length - 1] = { ...last, local: true };
+      return next;
+    });
   };
 
   const lastIsUser = messages[messages.length - 1]?.role === 'user';
@@ -715,27 +832,112 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             {/* 对话气泡 */}
             {messages.map((m, i) =>
               m.role === 'user' ? (
-                <div key={i} className="flex animate-fade-up justify-end">
-                  <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-bubble-user px-4 py-2.5 text-sm leading-relaxed text-accentInk shadow-glow-gold-sm">
-                    {m.content}
+                editingIndex === i ? (
+                  /* 编辑态：就地修改，保存后丢弃后续对话并重发 */
+                  <div key={i} className="flex animate-fade-up justify-end">
+                    <div className="w-full max-w-[85%] rounded-2xl border border-gold/40 bg-night-800 p-2.5 shadow-glow-gold-sm">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        rows={Math.min(10, Math.max(2, editText.split('\n').length))}
+                        autoFocus
+                        className="w-full resize-none rounded-xl border border-night-600 bg-night-900/70 px-3 py-2 text-sm leading-relaxed text-ink outline-none transition focus:border-gold/60"
+                      />
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] text-ink-faint">{t('chat.editHint')}</span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingIndex(null);
+                              setEditText('');
+                            }}
+                            className="cursor-pointer rounded-lg border border-night-600 px-3 py-1.5 text-xs text-ink-muted transition hover:text-ink"
+                          >
+                            {t('chat.cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => submitEdit(i)}
+                            disabled={!editText.trim()}
+                            className="cursor-pointer rounded-lg bg-gold-gradient px-3 py-1.5 text-xs font-medium text-accentInk transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {t('chat.saveAndResend')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div key={i} className="group flex animate-fade-up flex-col items-end gap-1">
+                    <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-bubble-user px-4 py-2.5 text-sm leading-relaxed text-accentInk shadow-glow-gold-sm">
+                      {m.content}
+                    </div>
+                    {!streaming && (
+                      <div className="flex items-center gap-1 pr-1 opacity-0 transition group-hover:opacity-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingIndex(i);
+                            setEditText(m.content);
+                          }}
+                          className="flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-ink-faint transition hover:bg-night-700/60 hover:text-gold"
+                        >
+                          <EditIcon />
+                          {t('chat.edit')}
+                        </button>
+                        <CopyButton text={m.content} />
+                        {i === messages.length - 1 && (
+                          <button
+                            type="button"
+                            onClick={regenerate}
+                            className="flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-ink-faint transition hover:bg-night-700/60 hover:text-gold"
+                          >
+                            <RefreshIcon />
+                            {t('chat.regenerate')}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
               ) : (
-                <div key={i} className="flex animate-fade-up items-start gap-3">
+                <div key={i} className="group flex animate-fade-up items-start gap-3">
                   <div className="mt-0.5 shrink-0 rounded-xl border border-night-600 bg-night-800 p-1.5">
                     <StaffLogo className="h-6 w-6" />
                   </div>
-                  <div
-                    className={`max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tl-sm border px-4 py-2.5 text-sm leading-relaxed ${
-                      m.failed
-                        ? 'border-cinnabar/40 bg-cinnabar/10 text-cinnabar-400'
-                        : 'border-night-600 bg-night-800/80 text-ink'
-                    }`}
-                  >
-                    {m.failed && (
-                      <span className="mb-1 block text-xs font-medium opacity-80">{t('chat.tip')}</span>
+                  <div className="flex min-w-0 max-w-[85%] flex-col items-start gap-1">
+                    <div
+                      className={`w-full min-w-0 rounded-2xl rounded-tl-sm border px-4 py-2.5 ${
+                        m.failed
+                          ? 'border-cinnabar/40 bg-cinnabar/10 text-sm leading-relaxed text-cinnabar-400'
+                          : 'border-night-600 bg-night-800/80 text-ink'
+                      }`}
+                    >
+                      {m.failed ? (
+                        <>
+                          <span className="mb-1 block text-xs font-medium opacity-80">{t('chat.tip')}</span>
+                          <p className="whitespace-pre-wrap">{m.content}</p>
+                        </>
+                      ) : (
+                        <Markdown content={m.content} />
+                      )}
+                    </div>
+                    {!streaming && !m.failed && (
+                      <div className="flex items-center gap-1 pl-1 opacity-0 transition group-hover:opacity-100">
+                        <CopyButton text={m.content} />
+                        {i === messages.length - 1 && (
+                          <button
+                            type="button"
+                            onClick={regenerate}
+                            className="flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-ink-faint transition hover:bg-night-700/60 hover:text-gold"
+                          >
+                            <RefreshIcon />
+                            {t('chat.regenerate')}
+                          </button>
+                        )}
+                      </div>
                     )}
-                    {m.content}
                   </div>
                 </div>
               ),
