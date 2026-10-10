@@ -18,6 +18,8 @@ import ApiKeyDialog, { KeyIcon } from './ApiKeyDialog';
 interface ChatMsg {
   role: 'user' | 'assistant';
   content: string;
+  // 该条助手消息是失败提示（Key 无效 / 网络异常等），用警示样式渲染
+  failed?: boolean;
 }
 
 // 工具调用日志（结构化，便于卡片化展示）
@@ -352,11 +354,27 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           return next;
         });
       } else if (e.type === 'error') {
-        setToolLog((prev) => {
+        // 只是某个工具失败：记进法宝日志，对话继续
+        if (e.fatal === false) {
+          setToolLog((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last) last.error = e.message;
+            else next.push({ name: '工具', error: e.message });
+            return next;
+          });
+          return;
+        }
+        // 整轮对话失败（如 API Key 无效）：作为一条助手消息展示友好文案
+        setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
-          if (last) last.error = e.message;
-          else next.push({ name: '系统', error: e.message });
+          if (last && last.role === 'assistant') {
+            // 已流式输出一半才失败：用完整文案覆盖，避免留在半截内容
+            next[next.length - 1] = { role: 'assistant', content: e.message, failed: true };
+          } else {
+            next.push({ role: 'assistant', content: e.message, failed: true });
+          }
           return next;
         });
       }
@@ -367,7 +385,11 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
         console.error('对话失败:', err);
-        setToolLog((prev) => [...prev, { name: '连接', error: String(err?.message ?? err) }]);
+        // 连接层异常也用助手消息展示，界面不再出现「系统出错」字样
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: friendlyClientError(err), failed: true },
+        ]);
       }
     } finally {
       setStreaming(false);
@@ -574,7 +596,16 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   <div className="mt-0.5 shrink-0 rounded-xl border border-night-600 bg-night-800 p-1.5">
                     <StaffLogo className="h-6 w-6" />
                   </div>
-                  <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tl-sm border border-night-600 bg-night-800/80 px-4 py-2.5 text-sm leading-relaxed text-ink">
+                  <div
+                    className={`max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tl-sm border px-4 py-2.5 text-sm leading-relaxed ${
+                      m.failed
+                        ? 'border-cinnabar/40 bg-cinnabar/10 text-cinnabar-400'
+                        : 'border-night-600 bg-night-800/80 text-ink'
+                    }`}
+                  >
+                    {m.failed && (
+                      <span className="mb-1 block text-xs font-medium opacity-80">提示</span>
+                    )}
                     {m.content}
                   </div>
                 </div>
@@ -763,4 +794,17 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 // 结果过长时截断展示
 function truncate(text: string, max = 120) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * 连接层异常的友好文案
+ * 后端返回的文案（如「登录已失效，请重新登录」）已是给用户看的，优先透传；
+ * 浏览器原生报错（Failed to fetch 等）则翻译成人话。
+ */
+function friendlyClientError(err: unknown): string {
+  const raw = String((err as any)?.message ?? err ?? '').trim();
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return '网络好像开小差了，检查一下网络或稍后再试试～';
+  }
+  return raw || '大圣这边出了点小状况，稍后再试一次吧～';
 }

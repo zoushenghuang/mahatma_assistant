@@ -38,4 +38,7 @@ export type AgentEvent =
   | { type: 'tool_start'; name: string } // 开始执行工具
   | { type: 'tool_end'; name: string; result: string } // 工具执行完成
   | { type: 'done' } // 整轮对话结束
-  | { type: 'error'; message: string }; // 出错
+  // 出错：message 已是面向用户的友好文案
+  // fatal = true（默认）表示本轮对话失败，前端作为一条助手消息展示；
+  // fatal = false 表示仅某个工具执行失败，前端只记在法宝日志里，对话继续
+  | { type: 'error'; message: string; fatal?: boolean };

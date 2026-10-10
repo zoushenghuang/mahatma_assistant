@@ -42,7 +42,8 @@ export type SseEvent =
   | { type: 'tool_start'; name: string }
   | { type: 'tool_end'; name: string; result: string }
   | { type: 'done' }
-  | { type: 'error'; message: string };
+  // message 已是面向用户的友好文案；fatal 为 false 时仅工具失败（对话继续）
+  | { type: 'error'; message: string; fatal?: boolean };
 
 const BASE = '/api';
 const TOKEN_KEY = 'dasheng_token';

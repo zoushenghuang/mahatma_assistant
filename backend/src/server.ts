@@ -24,6 +24,7 @@ import {
   resetPassword,
 } from './auth';
 import { getDisplayMessages } from './history';
+import { friendlyErrorMessage } from './errors';
 import type { AgentEvent } from './types';
 
 /**
@@ -235,7 +236,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, u
 
   const fail = (msg: string) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' });
-    res.write(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: msg, fatal: true })}\n\n`);
     res.end();
   };
 
@@ -283,8 +284,9 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, u
     if (controller.signal.aborted) {
       console.log('[Server] 客户端已断开，中止请求');
     } else {
+      // 原始异常只写服务端日志；推给用户的是翻译后的友好文案
       console.error('[Server] 处理失败:', err?.message ?? err);
-      if (!res.destroyed) emit({ type: 'error', message: err?.message ?? String(err) });
+      if (!res.destroyed) emit({ type: 'error', message: friendlyErrorMessage(err), fatal: true });
     }
   } finally {
     res.end();

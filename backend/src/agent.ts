@@ -185,7 +185,8 @@ export async function runChat(
       } catch (err: any) {
         result = `工具执行出错: ${err?.message ?? err}`;
         console.error(`[Agent] 工具 ${tc.name} 执行出错: ${err?.message ?? err}`);
-        emit({ type: 'error', message: result });
+        // fatal: false —— 只是这一个工具失败，对话继续，前端记进法宝日志即可
+        emit({ type: 'error', message: result, fatal: false });
       }
       await history.addMessage(new ToolMessage({ content: result, tool_call_id: tc.id }));
     }
