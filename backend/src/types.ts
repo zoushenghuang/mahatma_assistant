@@ -32,6 +32,12 @@ export interface OpenAITool {
   };
 }
 
+// 工具执行上下文：让工具能拿到「是谁在调用」，用于按用户隔离数据（如知识库检索）
+export interface ToolContext {
+  userId: string;
+  sessionId?: string;
+}
+
 // 通过 SSE 推送给前端的事件类型
 export type AgentEvent =
   | { type: 'content'; text: string } // 文本增量（前端逐字渲染）

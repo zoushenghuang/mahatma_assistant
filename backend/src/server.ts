@@ -2,10 +2,15 @@ import http from 'node:http';
 import { config } from './config';
 import { runChat } from './agent';
 import {
+  createDocument,
   createSession,
+  deleteDocument,
   deleteSession,
+  finalizeDocument,
   getSession,
   getUserApiKey,
+  insertChunks,
+  listDocuments,
   listSessions,
   setUserApiKey,
   touchSession,
@@ -15,6 +20,7 @@ import {
 import { invalidateAgentCache } from './agent';
 import { isApiKeyRequired } from './llm';
 import { maskSecret } from './crypto';
+import { chunkText, extractText } from './knowledge';
 import {
   AuthError,
   getUserFromRequest,
@@ -46,6 +52,9 @@ import type { AgentEvent } from './types';
  * - POST   /api/sessions                 新建会话
  * - DELETE /api/sessions/:id             删除会话（级联删消息）
  * - GET    /api/sessions/:id/messages    会话消息（前端切换会话时加载）
+ * - GET    /api/documents                我的知识库文档列表
+ * - POST   /api/documents                上传文档（body: { filename, mime, data(base64) }）
+ * - DELETE /api/documents/:id            删除文档（级联删分块）
  * - POST   /api/chat                     对话 SSE（body: { sessionId, message }）
  */
 
@@ -212,6 +221,31 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // ===== 知识库（RAG）：文档上传 / 列表 / 删除 =====
+
+  // 文档列表
+  if (req.method === 'GET' && url.pathname === '/api/documents') {
+    sendJson(res, 200, await listDocuments(user!.id));
+    return;
+  }
+
+  // 上传文档：前端读文件为 base64，后端解码 → 解析文本 → 分块入库
+  if (req.method === 'POST' && url.pathname === '/api/documents') {
+    const body = await readJson(req, UPLOAD_MAX_BYTES);
+    const doc = await handleUpload(user!, body);
+    sendJson(res, 200, doc);
+    return;
+  }
+
+  // 删除文档（级联删分块）
+  const docMatch = url.pathname.match(/^\/api\/documents\/([\w-]+)$/);
+  if (req.method === 'DELETE' && docMatch) {
+    const ok = await deleteDocument(docMatch[1], user!.id);
+    res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok }));
+    return;
+  }
+
   // ===== 对话 SSE =====
   if (req.method === 'POST' && url.pathname === '/api/chat') {
     await handleChat(req, res, user!);
@@ -293,15 +327,27 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, u
   }
 }
 
-/** 读取 JSON 请求体 */
-function readJson(req: http.IncomingMessage): Promise<any> {
+/**
+ * 读取 JSON 请求体
+ * @param maxBytes 体积上限：普通接口 1MB；文档上传（base64 后）放宽到 20MB
+ */
+function readJson(req: http.IncomingMessage, maxBytes = 1e6): Promise<any> {
   return new Promise((resolve, reject) => {
     let data = '';
+    let tooLarge = false;
     req.on('data', (chunk) => {
+      if (tooLarge) return; // 已判定超限，丢弃后续数据，等待 end
       data += chunk;
-      if (data.length > 1e6) req.destroy(); // 1MB 上限
+      if (data.length > maxBytes) {
+        tooLarge = true;
+        data = '';
+      }
     });
     req.on('end', () => {
+      if (tooLarge) {
+        reject(new Error(`文件过大，请求体不能超过 ${Math.round(maxBytes / 1024 / 1024)}MB`));
+        return;
+      }
       try {
         resolve(JSON.parse(data || '{}'));
       } catch {
@@ -316,4 +362,53 @@ function readJson(req: http.IncomingMessage): Promise<any> {
 function makeTitle(text: string): string {
   const t = text.replace(/\s+/g, ' ').trim();
   return t.length > 20 ? `${t.slice(0, 20)}…` : t || '新对话';
+}
+
+// ===== 知识库上传 =====
+
+const UPLOAD_MAX_BYTES = 20 * 1024 * 1024; // 请求体上限（base64 编码后，约对应 8MB 原文件）
+const FILE_MAX_BYTES = 8 * 1024 * 1024; // 单文件原始大小上限
+
+/**
+ * 处理文档上传：先落库记录，再解析 / 分块 / 回填状态。
+ * 解析失败也返回 200 + status='failed'，让前端展示失败原因，而不是整请求报错。
+ */
+async function handleUpload(user: UserRow, body: any) {
+  const filename = String(body?.filename ?? '').trim();
+  const mime = String(body?.mime ?? '').trim();
+  const data = String(body?.data ?? '');
+
+  if (!filename) throw new AuthError('缺少文件名');
+  if (!data) throw new AuthError('文件内容为空');
+
+  const buffer = Buffer.from(data, 'base64');
+  if (buffer.length === 0) throw new AuthError('文件内容解析失败，请重试');
+  if (buffer.length > FILE_MAX_BYTES) {
+    throw new AuthError(`文件过大，请上传 ${FILE_MAX_BYTES / 1024 / 1024}MB 以内的文件`);
+  }
+
+  // 先落一条记录（状态 pending），再异步解析，便于失败时保留可读的错误信息
+  const doc = await createDocument({
+    userId: user.id,
+    filename,
+    mime,
+    size: buffer.length,
+    status: 'pending',
+  });
+
+  try {
+    const text = await extractText(filename, mime, buffer);
+    const chunks = chunkText(text);
+    if (chunks.length === 0) throw new Error('未能从文件中解析出文本内容（可能是空文件或扫描件）');
+
+    await insertChunks(doc.id, user.id, chunks);
+    await finalizeDocument(doc.id, { chunkCount: chunks.length, status: 'ready' });
+    console.log(`[知识库] 用户 ${user.username} 上传《${filename}》，切分为 ${chunks.length} 块`);
+    return { ...doc, chunkCount: chunks.length, status: 'ready', error: null };
+  } catch (err: any) {
+    const message = err?.message ?? '解析失败';
+    console.error(`[知识库] 解析《${filename}》失败: ${message}`);
+    await finalizeDocument(doc.id, { chunkCount: 0, status: 'failed', error: message });
+    return { ...doc, chunkCount: 0, status: 'failed', error: message };
+  }
 }

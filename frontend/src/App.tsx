@@ -11,6 +11,7 @@ import {
 } from './api';
 import AuthPage from './AuthPage';
 import ApiKeyDialog, { KeyIcon } from './ApiKeyDialog';
+import KnowledgeDialog, { BookIcon } from './KnowledgeDialog';
 import SettingsDialog from './SettingsDialog';
 import { useSettings, type Translate } from './settings';
 
@@ -213,6 +214,8 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   // 我的 API Key 状态（未设置时提示先填写，对话用自己的 Key）
   const [keyStatus, setKeyStatus] = useState<ApiKeyStatus | null>(null);
   const [keyDialogOpen, setKeyDialogOpen] = useState(false);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false); // 知识库面板
+  const [docCount, setDocCount] = useState(0); // 已上传文档数（入口角标）
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false); // 头像下拉菜单
   const menuRef = useRef<HTMLDivElement>(null);
@@ -230,6 +233,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   // 空状态示例问题（对应工具能力）
   const examples = [
     { label: t('chat.exampleWeatherLabel'), text: t('chat.exampleWeatherText') },
+    { label: t('knowledge.entry'), text: t('knowledge.exampleText') },
     { label: t('chat.exampleEchoLabel'), text: t('chat.exampleEchoText') },
   ];
 
@@ -238,6 +242,11 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       .getApiKey()
       .then(setKeyStatus)
       .catch(() => setKeyStatus(null));
+    // 知识库文档数（入口角标）
+    api
+      .listDocuments()
+      .then((list) => setDocCount(list.length))
+      .catch(() => setDocCount(0));
   }, []);
 
   const needKey = keyStatus !== null && keyStatus.required && !keyStatus.hasKey;
@@ -538,8 +547,22 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             </div>
           </div>
 
-          {/* 右侧：我的 Key + 用户头像（点击弹出设置菜单） */}
+          {/* 右侧：知识库 + 我的 Key + 用户头像（点击弹出设置菜单） */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setKnowledgeOpen(true)}
+              title={t('knowledge.title')}
+              className="relative flex cursor-pointer items-center gap-1.5 rounded-xl border border-night-600 px-2.5 py-1.5 text-xs text-ink-muted transition hover:border-gold/40 hover:text-gold"
+            >
+              <BookIcon />
+              <span className="hidden sm:inline">{t('knowledge.entry')}</span>
+              {docCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-gold px-1 font-display text-[10px] font-bold text-accentInk">
+                  {docCount}
+                </span>
+              )}
+            </button>
+
             <button
               onClick={() => setKeyDialogOpen(true)}
               title={t('key.title')}
@@ -865,6 +888,11 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             setKeyDialogOpen(false);
           }}
         />
+      )}
+
+      {/* 「我的知识库」弹窗（上传文档 → RAG 检索） */}
+      {knowledgeOpen && (
+        <KnowledgeDialog onClose={() => setKnowledgeOpen(false)} onCountChange={setDocCount} />
       )}
 
       {/* 设置弹窗（外观 / 语言） */}

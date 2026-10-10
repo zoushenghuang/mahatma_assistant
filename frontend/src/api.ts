@@ -36,6 +36,19 @@ export interface ApiKeyStatus {
   required: boolean;
 }
 
+/** 知识库文档（RAG 数据源） */
+export interface KnowledgeDoc {
+  id: string;
+  userId: string;
+  filename: string;
+  mime: string;
+  size: number;
+  chunkCount: number;
+  status: 'pending' | 'ready' | 'failed';
+  error: string | null;
+  createdAt: number;
+}
+
 // 后端通过 SSE 推送的事件
 export type SseEvent =
   | { type: 'content'; text: string }
@@ -153,6 +166,19 @@ export const api = {
 
   /** 加载会话历史（切换会话时展示） */
   getMessages: (id: string) => json<DisplayMessage[]>(`${BASE}/sessions/${id}/messages`),
+
+  // ===== 知识库（RAG）：上传 / 列表 / 删除（数据按用户隔离）=====
+
+  /** 我的知识库文档列表 */
+  listDocuments: () => json<KnowledgeDoc[]>(`${BASE}/documents`),
+
+  /** 上传文档（前端把文件读成 base64 后随 JSON 提交） */
+  uploadDocument: (input: { filename: string; mime: string; data: string }) =>
+    post<KnowledgeDoc>(`${BASE}/documents`, input),
+
+  /** 删除文档（级联删除其分块） */
+  deleteDocument: (id: string) =>
+    json<{ ok: boolean }>(`${BASE}/documents/${id}`, { method: 'DELETE' }),
 
   /**
    * 流式对话（POST + SSE）：

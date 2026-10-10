@@ -1,6 +1,6 @@
 # mahatma_assistant
 
-一个自研的 AI 聊天助手（学习 Demo）：覆盖 **Function Calling → MCP 工具自动发现 → 多轮记忆 → SSE 流式输出** 的完整闭环，并带有账号体系与多会话管理。
+一个自研的 AI 聊天助手（学习 Demo）：覆盖 **文档上传 / RAG 检索 → Function Calling → MCP 工具自动发现 → 多轮记忆 → SSE 流式输出** 的完整闭环，并带有账号体系与多会话管理。
 
 ## 功能特性
 
@@ -10,6 +10,7 @@
 - **流式对话**：后端 SSE 逐 token 推送，前端边生成边渲染，可随时中断
 - **Function Calling**：内置本地工具 `getWeather`（查天气 + 穿衣建议），工具调用过程在界面上以卡片展示
 - **MCP 集成**：启动时通过 stdio 拉起 `server-everything` 子进程，自动发现第三方工具并转成 OpenAI 工具格式，与本地工具一起交给模型
+- **知识库 RAG**：上传 `txt / md / json / csv / pdf / docx` 等文档，后端解析文本并切分为片段存入 MySQL；对话时模型通过 `searchKnowledge` 工具检索相关片段作答，文档与检索结果严格按用户隔离
 - **Mock 模式**：设置 `MOCK_LLM=1` 无需真实 Key 即可跑通全链路
 
 ## 技术栈
@@ -31,18 +32,20 @@ backend/
     config.ts       # 环境变量集中管理
     server.ts       # HTTP 路由与 SSE 对话接口
     auth.ts         # 注册/登录/找回密码 + JWT
-    db.ts           # MySQL 数据层（users / sessions / messages）
+    db.ts           # MySQL 数据层（users / sessions / messages / documents / doc_chunks）
     agent.ts        # LangChain Agent：工具绑定 + 流式执行
     llm.ts          # 按用户 Key 创建模型（含 Mock 模式）
     history.ts      # 会话历史 ↔ 模型上下文
+    knowledge.ts    # 轻量 RAG：文件解析 + 文本分块 + 关键词检索打分
     crypto.ts       # 密码哈希、Key 加解密、脱敏
-    tools/          # localTools（本地工具）/ mcpTools（MCP Client）/ tools（合并与分发）
+    tools/          # localTools / knowledgeTool（RAG 检索）/ mcpTools（MCP Client）/ tools（合并与分发）
   .env.example      # 环境变量模板
 frontend/
   src/
     App.tsx         # 聊天主界面（会话列表 + 消息流 + 工具卡片）
     AuthPage.tsx    # 登录 / 注册 / 找回密码
     ApiKeyDialog.tsx# 「我的 Key」管理
+    KnowledgeDialog.tsx # 「我的知识库」上传 / 列表 / 删除
     api.ts          # 接口封装与 SSE 解析
 ```
 
@@ -106,6 +109,7 @@ cd frontend && npm run build      # 前端构建
 - `GET|PUT|DELETE /api/user/api-key`
 - `GET /api/sessions`、`POST /api/sessions`、`DELETE /api/sessions/:id`
 - `GET /api/sessions/:id/messages`
+- `GET /api/documents`、`POST /api/documents`（body: `{ filename, mime, data(base64) }`）、`DELETE /api/documents/:id`
 - `POST /api/chat`（SSE，body: `{ sessionId, message }`）
 
 ## 注意事项

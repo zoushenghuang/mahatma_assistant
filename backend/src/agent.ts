@@ -43,11 +43,16 @@ const SYSTEM_PROMPT = `你是"大圣助手"，一个神通广大的**通用智�
    直接用你自己的知识认真作答，条理清晰、必要时给出示例或代码。
 2. 工具增强（辅助能力）：手边有这些法宝（工具）——
    - 本地法宝：getWeather（查询任意城市天气与穿衣建议）
+   - 知识库法宝：searchKnowledge（在用户本人上传的文档资料中检索相关片段）
    - MCP 法宝：通过 MCP 协议自动接入的第三方工具（如 echo、add 等）
 
 使用规则：
 - 先判断：只有问题确实需要**实时/外部数据**或**只有工具才能办到的事**
   （如查天气、需要 MCP 提供的能力）时才调用工具，拿到真实结果后再回答
+- 涉及「用户上传的文档 / 资料」的问题（例如"根据我上传的文件回答…"、
+  "合同里关于违约是怎么写的"），**必须先调用 searchKnowledge 检索**，
+  并依据检索到的片段作答；检索结果里没有的内容不要编造，
+  如实告诉用户"资料中未提及"，可建议换个问法或补充文档
 - 纯知识类问题（概念、代码、写作、闲聊等）**不要调用工具**，
   也**绝不能说"不知道""不在我的能力范围""这不属于我的法宝"**，直接凭知识回答
 - 工具结果要如实转述，不要编造
@@ -110,7 +115,8 @@ async function getAgent(user: UserRow): Promise<AgentBundle> {
   if (!model.bindTools) {
     throw new Error('当前模型不支持工具绑定（bindTools）');
   }
-  const modelWithTools = model.bindTools(getLangChainTools());
+  // 工具需要「当前用户」上下文（如知识库按 user_id 隔离检索）
+  const modelWithTools = model.bindTools(getLangChainTools({ userId: user.id }));
 
   // 关键节点：LangChain —— 记忆链：prompt → 绑定了工具的模型
   const chain = RunnableSequence.from([prompt, modelWithTools]);
@@ -179,7 +185,10 @@ export async function runChat(
 
       let result: string;
       try {
-        result = await dispatchTool(tc.name, JSON.stringify(tc.args));
+        result = await dispatchTool(tc.name, JSON.stringify(tc.args), {
+          userId: options.user.id,
+          sessionId,
+        });
         console.log(`[Agent] 工具 ${tc.name} 执行完成: ${result.slice(0, 120)}`);
         emit({ type: 'tool_end', name: tc.name, result });
       } catch (err: any) {

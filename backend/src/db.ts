@@ -101,6 +101,42 @@ const DDL_MESSAGES = `
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
+// 知识库文档表：用户上传的原始文件元数据（RAG 的「文档」层）
+const DDL_DOCUMENTS = `
+  CREATE TABLE IF NOT EXISTS documents (
+    id          VARCHAR(36)  NOT NULL,
+    user_id     VARCHAR(36)  NOT NULL,
+    filename    VARCHAR(255) NOT NULL,
+    mime        VARCHAR(128) NOT NULL DEFAULT '',
+    size        BIGINT       NOT NULL DEFAULT 0,
+    chunk_count INT          NOT NULL DEFAULT 0,
+    status      VARCHAR(16)  NOT NULL DEFAULT 'ready',
+    error       TEXT         NULL,
+    created_at  BIGINT       NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_documents_user (user_id, created_at),
+    CONSTRAINT fk_documents_user FOREIGN KEY (user_id)
+      REFERENCES users (id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
+
+// 文档分块表：把文档切成小片，作为检索的最小单元（RAG 的「切片」层）
+const DDL_DOC_CHUNKS = `
+  CREATE TABLE IF NOT EXISTS doc_chunks (
+    id          BIGINT       NOT NULL AUTO_INCREMENT,
+    document_id VARCHAR(36)  NOT NULL,
+    user_id     VARCHAR(36)  NOT NULL,
+    chunk_index INT          NOT NULL,
+    content     TEXT         NOT NULL,
+    created_at  BIGINT       NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_chunks_document (document_id, chunk_index),
+    KEY idx_chunks_user (user_id),
+    CONSTRAINT fk_chunks_document FOREIGN KEY (document_id)
+      REFERENCES documents (id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
+
 /**
  * 初始化数据库：库不存在则创建 → 建表
  * 必须在启动 HTTP 服务前 await 调用（见 index.ts）
@@ -127,6 +163,8 @@ export async function initDb(): Promise<void> {
   await pool.query(DDL_RESETS);
   await pool.query(DDL_SESSIONS);
   await pool.query(DDL_MESSAGES);
+  await pool.query(DDL_DOCUMENTS);
+  await pool.query(DDL_DOC_CHUNKS);
 
   // 老库升级：sessions 早期版本没有 user_id，补列 + 回填到演示账号
   await migrateSessionsOwner();
@@ -545,5 +583,192 @@ export async function getMessagesBySession(sessionId: string): Promise<MessageRo
     toolCalls: r.tool_calls ?? null,
     toolCallId: r.tool_call_id ?? null,
     createdAt: Number(r.created_at),
+  }));
+}
+
+// ============ 知识库（RAG）：文档 CRUD ============
+
+/** 文档行（对外） */
+export interface DocumentRow {
+  id: string;
+  userId: string;
+  filename: string;
+  mime: string;
+  size: number;
+  chunkCount: number;
+  status: string; // ready | failed
+  error: string | null;
+  createdAt: number;
+}
+
+/** 分块行（检索单元） */
+export interface ChunkRow {
+  id: number;
+  documentId: string;
+  userId: string;
+  chunkIndex: number;
+  content: string;
+  createdAt: number;
+}
+
+/** 带来源文件名的分块（检索结果用） */
+export interface ChunkWithSource extends ChunkRow {
+  filename: string;
+}
+
+type DocumentDbRow = RowDataPacket & {
+  id: string;
+  user_id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  chunk_count: number;
+  status: string;
+  error: string | null;
+  created_at: number;
+};
+
+type ChunkDbRow = RowDataPacket & {
+  id: number;
+  document_id: string;
+  user_id: string;
+  chunk_index: number;
+  content: string;
+  created_at: number;
+};
+
+function toDocumentRow(r: DocumentDbRow): DocumentRow {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    filename: r.filename,
+    mime: r.mime,
+    size: Number(r.size),
+    chunkCount: Number(r.chunk_count),
+    status: r.status,
+    error: r.error ?? null,
+    createdAt: Number(r.created_at),
+  };
+}
+
+/** 新建文档记录（先落库，解析/分块随后异步补齐） */
+export async function createDocument(input: {
+  userId: string;
+  filename: string;
+  mime: string;
+  size: number;
+  status?: string;
+  error?: string | null;
+}): Promise<DocumentRow> {
+  const id = randomUUID();
+  const now = Date.now();
+  const status = input.status ?? 'ready';
+  await pool.query(
+    `INSERT INTO documents (id, user_id, filename, mime, size, chunk_count, status, error, created_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+    [id, input.userId, input.filename, input.mime, input.size, status, input.error ?? null, now],
+  );
+  return {
+    id,
+    userId: input.userId,
+    filename: input.filename,
+    mime: input.mime,
+    size: input.size,
+    chunkCount: 0,
+    status,
+    error: input.error ?? null,
+    createdAt: now,
+  };
+}
+
+/** 批量写入分块（事务，避免只写一半） */
+export async function insertChunks(
+  documentId: string,
+  userId: string,
+  contents: string[],
+): Promise<void> {
+  if (contents.length === 0) return;
+  const now = Date.now();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    for (let i = 0; i < contents.length; i++) {
+      await conn.query(
+        `INSERT INTO doc_chunks (document_id, user_id, chunk_index, content, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [documentId, userId, i, contents[i], now],
+      );
+    }
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/** 回填文档的解析结果（成功：chunkCount；失败：status=failed + error） */
+export async function finalizeDocument(
+  id: string,
+  result: { chunkCount: number; status: string; error?: string | null },
+): Promise<void> {
+  await pool.query(`UPDATE documents SET chunk_count = ?, status = ?, error = ? WHERE id = ?`, [
+    result.chunkCount,
+    result.status,
+    result.error ?? null,
+    id,
+  ]);
+}
+
+/** 某用户的知识库文档列表（最新在前） */
+export async function listDocuments(userId: string): Promise<DocumentRow[]> {
+  const [rows] = await pool.query<DocumentDbRow[]>(
+    `SELECT id, user_id, filename, mime, size, chunk_count, status, error, created_at
+     FROM documents WHERE user_id = ? ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows.map(toDocumentRow);
+}
+
+/** 按 id 查文档（传 userId 时校验归属） */
+export async function getDocument(id: string, userId?: string): Promise<DocumentRow | undefined> {
+  const [rows] = await pool.query<DocumentDbRow[]>(
+    `SELECT id, user_id, filename, mime, size, chunk_count, status, error, created_at
+     FROM documents WHERE id = ? ${userId ? 'AND user_id = ?' : ''}`,
+    userId ? [id, userId] : [id],
+  );
+  return rows[0] ? toDocumentRow(rows[0]) : undefined;
+}
+
+/** 删除文档（校验归属；外键级联删除其分块） */
+export async function deleteDocument(id: string, userId: string): Promise<boolean> {
+  if (!(await getDocument(id, userId))) return false;
+  await pool.query(`DELETE FROM documents WHERE id = ? AND user_id = ?`, [id, userId]);
+  return true;
+}
+
+/**
+ * 取某用户的全部知识库分块（含来源文件名），供内存检索打分。
+ * Demo 场景下数据量可控，直接一次性读回落库；limit 作为安全上限。
+ */
+export async function getChunksByUser(userId: string, limit = 3000): Promise<ChunkWithSource[]> {
+  const [rows] = await pool.query<(ChunkDbRow & { filename: string })[]>(
+    `SELECT c.id, c.document_id, c.user_id, c.chunk_index, c.content, c.created_at, d.filename
+     FROM doc_chunks c
+     JOIN documents d ON d.id = c.document_id
+     WHERE c.user_id = ? AND d.status = 'ready'
+     ORDER BY c.id ASC
+     LIMIT ?`,
+    [userId, limit],
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    documentId: r.document_id,
+    userId: r.user_id,
+    chunkIndex: Number(r.chunk_index),
+    content: r.content,
+    createdAt: Number(r.created_at),
+    filename: r.filename,
   }));
 }
