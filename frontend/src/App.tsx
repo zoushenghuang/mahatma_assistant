@@ -11,6 +11,8 @@ import {
 } from './api';
 import AuthPage from './AuthPage';
 import ApiKeyDialog, { KeyIcon } from './ApiKeyDialog';
+import SettingsDialog from './SettingsDialog';
+import { useSettings, type Translate } from './settings';
 
 // ============ 类型 ============
 
@@ -118,7 +120,7 @@ function CloseIcon() {
 }
 
 /** 右键头 · 折叠箭头 */
-function ChevronIcon({ open }: { open: boolean }) {
+function ChevronIcon({ open, className = 'h-4 w-4' }: { open: boolean; className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -127,7 +129,7 @@ function ChevronIcon({ open }: { open: boolean }) {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={`h-4 w-4 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+      className={`${className} transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
       aria-hidden="true"
     >
       <path d="m6 9 6 6 6-6" />
@@ -135,13 +137,26 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
-// ============ 常量 ============
+/** 滑杆 · 设置 */
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+      <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3" />
+      <path d="M1 14h6M9 8h6M17 16h6" />
+    </svg>
+  );
+}
 
-// 空状态示例问题（对应工具能力）
-const EXAMPLES = [
-  { label: '本地法宝 · getWeather', text: '长沙今天要不要穿棉袄？' },
-  { label: 'MCP 法宝 · echo', text: '用 echo 工具输出测试文本' },
-];
+/** 门 · 退出登录 */
+function LogoutIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="m16 17 5-5-5-5" />
+      <path d="M21 12H9" />
+    </svg>
+  );
+}
 
 // ============ 登录态门禁 ============
 
@@ -150,6 +165,7 @@ const EXAMPLES = [
  * 刷新时先用本地 token 换一次 /api/auth/me，失效则回到登录页
  */
 export default function App() {
+  const { t } = useSettings();
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
@@ -179,7 +195,7 @@ export default function App() {
       <div className="flex h-screen items-center justify-center bg-night">
         <div className="flex flex-col items-center gap-3">
           <span className="h-8 w-8 animate-spin rounded-full border-2 border-night-600 border-t-gold" />
-          <p className="text-sm text-ink-faint">正在校验登录状态…</p>
+          <p className="text-sm text-ink-faint">{t('app.checking')}</p>
         </div>
       </div>
     );
@@ -192,9 +208,30 @@ export default function App() {
 // ============ 主组件（已登录）============
 
 function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { t } = useSettings();
+
   // 我的 API Key 状态（未设置时提示先填写，对话用自己的 Key）
   const [keyStatus, setKeyStatus] = useState<ApiKeyStatus | null>(null);
   const [keyDialogOpen, setKeyDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false); // 头像下拉菜单
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // 点击头像菜单外部时收起
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [menuOpen]);
+
+  // 空状态示例问题（对应工具能力）
+  const examples = [
+    { label: t('chat.exampleWeatherLabel'), text: t('chat.exampleWeatherText') },
+    { label: t('chat.exampleEchoLabel'), text: t('chat.exampleEchoText') },
+  ];
 
   useEffect(() => {
     api
@@ -362,7 +399,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             const next = [...prev];
             const last = next[next.length - 1];
             if (last) next[next.length - 1] = { ...last, error: e.message };
-            else next.push({ name: '工具', error: e.message });
+            else next.push({ name: t('chat.toolName'), error: e.message });
             return next;
           });
           return;
@@ -390,7 +427,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         // 连接层异常也用助手消息展示，界面不再出现「系统出错」字样
         setMessages((prev) => [
           ...prev,
-          { role: 'assistant', content: friendlyClientError(err), failed: true },
+          { role: 'assistant', content: friendlyClientError(err, t), failed: true },
         ]);
       }
     } finally {
@@ -416,8 +453,8 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         <div className="flex items-center gap-3 px-6 py-5">
           <StaffLogo className="h-10 w-10 drop-shadow-glow-gold-sm" />
           <div>
-            <h1 className="font-display text-lg font-bold tracking-wide text-gold-100">大圣助手</h1>
-            <p className="text-xs text-ink-faint">金箍棒一挥 · 法宝随手调用</p>
+            <h1 className="font-display text-lg font-bold tracking-wide text-gold-100">{t('app.name')}</h1>
+            <p className="text-xs text-ink-faint">{t('app.tagline')}</p>
           </div>
         </div>
 
@@ -425,21 +462,21 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         <div className="px-4">
           <button
             onClick={newSession}
-            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gold-gradient px-4 py-2.5 text-sm font-medium text-night transition hover:brightness-110 hover:shadow-glow-gold"
+            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gold-gradient px-4 py-2.5 text-sm font-medium text-accentInk transition hover:brightness-110 hover:shadow-glow-gold"
           >
             <PlusIcon />
-            新建会话
+            {t('chat.newSession')}
           </button>
         </div>
 
         {/* 会话列表 */}
         <div className="mt-4 flex min-h-0 flex-1 flex-col px-3">
           <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-widest text-ink-faint">
-            会话历史
+            {t('chat.history')}
           </p>
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
             {sessions.length === 0 && (
-              <p className="px-2 py-4 text-center text-xs text-ink-faint">暂无会话，先新建一个吧</p>
+              <p className="px-2 py-4 text-center text-xs text-ink-faint">{t('chat.noSessions')}</p>
             )}
             {sessions.map((s) => (
               <div
@@ -458,7 +495,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                     e.stopPropagation();
                     removeSession(s.id);
                   }}
-                  aria-label={`删除会话 ${s.title}`}
+                  aria-label={t('chat.deleteSession', { title: s.title })}
                   className="shrink-0 cursor-pointer rounded-md p-1 text-ink-faint opacity-0 transition hover:bg-cinnabar/20 hover:text-cinnabar group-hover:opacity-100"
                 >
                   <TrashIcon />
@@ -470,7 +507,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
         {/* 底部说明 */}
         <div className="px-4 py-4 text-[11px] leading-relaxed text-ink-faint">
-          Function Calling + MCP · 会话记忆持久化
+          {t('chat.footer')}
         </div>
       </aside>
 
@@ -482,13 +519,13 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             {/* 移动端：会话列表抽屉入口 */}
             <button
               onClick={() => setSessionDrawerOpen(true)}
-              aria-label="打开会话列表"
+              aria-label={t('chat.openSessions')}
               className="cursor-pointer rounded-lg border border-night-600 p-1.5 text-ink-muted transition hover:border-gold/40 hover:text-gold lg:hidden"
             >
               <HistoryIcon />
             </button>
             <StaffLogo className="h-8 w-8 lg:hidden" />
-            <h1 className="font-display text-base font-bold tracking-wide text-gold-100 lg:hidden">大圣助手</h1>
+            <h1 className="font-display text-base font-bold tracking-wide text-gold-100 lg:hidden">{t('app.name')}</h1>
             {/* 桌面端：当前会话标题 + 在线状态 */}
             <div className="hidden items-center gap-2 lg:flex">
               <span className="relative flex h-2 w-2">
@@ -496,16 +533,16 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-gold" />
               </span>
               <span className="max-w-[260px] truncate text-sm text-ink-muted">
-                {sessions.find((s) => s.id === activeSessionId)?.title ?? '在线 · 听候差遣'}
+                {sessions.find((s) => s.id === activeSessionId)?.title ?? t('chat.online')}
               </span>
             </div>
           </div>
 
-          {/* 右侧：我的 Key + 当前用户 + 退出登录 */}
+          {/* 右侧：我的 Key + 用户头像（点击弹出设置菜单） */}
           <div className="flex items-center gap-2">
             <button
               onClick={() => setKeyDialogOpen(true)}
-              title="我的 API Key"
+              title={t('key.title')}
               className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition ${
                 needKey
                   ? 'border-cinnabar/50 text-cinnabar-400 hover:bg-cinnabar/10'
@@ -513,41 +550,81 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               }`}
             >
               <KeyIcon />
-              <span className="hidden sm:inline">我的 Key</span>
+              <span className="hidden sm:inline">{t('chat.myKey')}</span>
               <span
                 className={`h-1.5 w-1.5 rounded-full ${needKey ? 'bg-cinnabar' : 'bg-gold'}`}
                 aria-hidden="true"
               />
             </button>
-            <div
-              title={`${user.username}（${user.email}）`}
-              className="flex max-w-[160px] items-center gap-2 rounded-xl border border-night-600 bg-night-800/60 px-2.5 py-1.5"
-            >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gold/15 font-display text-xs font-bold text-gold">
-                {(user.nickname || user.username).slice(0, 1).toUpperCase()}
-              </span>
-              <span className="truncate text-xs text-ink-muted">{user.nickname || user.username}</span>
+
+            {/* 头像 → 下拉菜单（设置 / 退出登录） */}
+            <div className="relative" ref={menuRef}>
+              <button
+                onClick={() => setMenuOpen((v) => !v)}
+                title={user.nickname || user.username}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                className={`flex max-w-[160px] cursor-pointer items-center gap-2 rounded-xl border px-2.5 py-1.5 transition ${
+                  menuOpen
+                    ? 'border-gold/50 bg-night-800 text-ink'
+                    : 'border-night-600 bg-night-800/60 text-ink-muted hover:border-gold/40 hover:text-ink'
+                }`}
+              >
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gold/15 font-display text-xs font-bold text-gold">
+                  {(user.nickname || user.username).slice(0, 1).toUpperCase()}
+                </span>
+                <span className="truncate text-xs">{user.nickname || user.username}</span>
+                <span className="shrink-0 text-ink-faint">
+                  <ChevronIcon open={menuOpen} className="h-3 w-3" />
+                </span>
+              </button>
+
+              {menuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-40 mt-2 w-40 animate-fade-in overflow-hidden rounded-xl border border-night-600 bg-night-800 py-1 shadow-panel"
+                >
+                  <div className="border-b border-night-700/60 px-3 pb-1.5 pt-1">
+                    <p className="truncate text-xs font-medium text-ink">{user.nickname || user.username}</p>
+                    <p className="truncate text-[11px] text-ink-faint">{user.email}</p>
+                  </div>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setSettingsOpen(true);
+                    }}
+                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm text-ink-muted transition hover:bg-night-700/60 hover:text-ink"
+                  >
+                    <SettingsIcon />
+                    {t('common.settings')}
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onLogout();
+                    }}
+                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm text-ink-muted transition hover:bg-cinnabar/10 hover:text-cinnabar-400"
+                  >
+                    <LogoutIcon />
+                    {t('common.logout')}
+                  </button>
+                </div>
+              )}
             </div>
-            <button
-              onClick={onLogout}
-              className="cursor-pointer rounded-xl border border-night-600 px-3 py-1.5 text-xs text-ink-muted transition hover:border-cinnabar/50 hover:text-cinnabar-400"
-            >
-              退出登录
-            </button>
           </div>
         </header>
 
         {/* 未配置 Key 时的引导条 */}
         {needKey && (
           <div className="flex items-center justify-between gap-3 border-b border-cinnabar/30 bg-cinnabar/10 px-4 py-2.5">
-            <p className="text-xs leading-relaxed text-cinnabar-400">
-              尚未填写 DeepSeek API Key，对话将无法进行。请在「我的 Key」中填入你自己的 Key（仅用于你本人的会话）。
-            </p>
+            <p className="text-xs leading-relaxed text-cinnabar-400">{t('chat.needKey')}</p>
             <button
               onClick={() => setKeyDialogOpen(true)}
               className="shrink-0 cursor-pointer rounded-lg border border-cinnabar/50 px-3 py-1.5 text-xs text-cinnabar-400 transition hover:bg-cinnabar/20"
             >
-              去填写
+              {t('chat.goFillKey')}
             </button>
           </div>
         )}
@@ -563,13 +640,13 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   <StaffLogo className="h-20 w-20 drop-shadow-glow-gold-sm" />
                 </div>
                 <h2 className="mt-6 font-display text-2xl font-bold text-gold-100">
-                  大圣在此，有何吩咐？
+                  {t('chat.heroTitle')}
                 </h2>
                 <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
-                  本座通晓 Function Calling 与 MCP 法宝，会话记忆持久保存，刷新不丢。
+                  {t('chat.heroSub')}
                 </p>
                 <div className="mx-auto mt-8 grid max-w-lg gap-3 sm:grid-cols-2">
-                  {EXAMPLES.map((ex) => (
+                  {examples.map((ex) => (
                     <button
                       key={ex.text}
                       onClick={() => send(ex.text)}
@@ -589,7 +666,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             {messages.map((m, i) =>
               m.role === 'user' ? (
                 <div key={i} className="flex animate-fade-up justify-end">
-                  <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-bubble-user px-4 py-2.5 text-sm leading-relaxed text-night shadow-glow-gold-sm">
+                  <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-bubble-user px-4 py-2.5 text-sm leading-relaxed text-accentInk shadow-glow-gold-sm">
                     {m.content}
                   </div>
                 </div>
@@ -606,7 +683,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                     }`}
                   >
                     {m.failed && (
-                      <span className="mb-1 block text-xs font-medium opacity-80">提示</span>
+                      <span className="mb-1 block text-xs font-medium opacity-80">{t('chat.tip')}</span>
                     )}
                     {m.content}
                   </div>
@@ -623,7 +700,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                 >
                   <span className="flex items-center gap-2 text-sm font-medium text-gold">
                     <GearIcon />
-                    法宝调用
+                    {t('chat.tools')}
                     <span className="rounded-md bg-gold/10 px-1.5 py-0.5 font-display text-xs text-gold">
                       {toolLog.length}
                     </span>
@@ -641,7 +718,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                             className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.error ? 'bg-cinnabar' : 'bg-gold'}`}
                           />
                           <span className="font-mono text-xs font-medium text-ink">
-                            {item.error ? `${item.name}（出错）` : item.name}
+                            {item.error ? t('chat.toolFailed', { name: item.name }) : item.name}
                           </span>
                         </div>
                         {(item.result || item.error) && (
@@ -670,7 +747,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                       style={{ animationDelay: `${d * 0.15}s` }}
                     />
                   ))}
-                  <span className="ml-1 text-xs text-ink-faint">大圣正在掐指推算…</span>
+                  <span className="ml-1 text-xs text-ink-faint">{t('chat.thinking')}</span>
                 </div>
               </div>
             )}
@@ -692,7 +769,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="禀报大圣，有何事相求…"
+                placeholder={t('chat.inputPlaceholder')}
                 disabled={streaming}
                 className="flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-faint disabled:cursor-not-allowed"
               />
@@ -701,7 +778,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 type="button"
                 onClick={stop}
-                aria-label="停止生成"
+                aria-label={t('chat.stop')}
                 className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-2xl border border-cinnabar/50 bg-cinnabar/10 text-cinnabar transition hover:bg-cinnabar/20"
               >
                 <StopIcon />
@@ -710,15 +787,15 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 type="submit"
                 disabled={!input.trim()}
-                aria-label="发送"
-                className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-2xl bg-gold-gradient text-night transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+                aria-label={t('chat.send')}
+                className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-2xl bg-gold-gradient text-accentInk transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
               >
                 <SendIcon />
               </button>
             )}
           </form>
           <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-ink-faint">
-            Function Calling + MCP · 会话上下文记忆（MySQL 持久化 · 按账号隔离）
+            {t('chat.footer')}
           </p>
         </footer>
       </section>
@@ -731,10 +808,10 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           {/* 抽屉 */}
           <div className="relative z-10 flex h-full w-72 flex-col border-r border-night-700 bg-night-900 p-4 shadow-panel">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="font-display text-base font-bold text-gold-100">会话历史</h2>
+              <h2 className="font-display text-base font-bold text-gold-100">{t('chat.history')}</h2>
               <button
                 onClick={() => setSessionDrawerOpen(false)}
-                aria-label="关闭会话列表"
+                aria-label={t('chat.closeSessions')}
                 className="cursor-pointer rounded-lg p-1.5 text-ink-muted transition hover:text-ink"
               >
                 <CloseIcon />
@@ -742,14 +819,14 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             </div>
             <button
               onClick={newSession}
-              className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gold-gradient px-4 py-2.5 text-sm font-medium text-night"
+              className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gold-gradient px-4 py-2.5 text-sm font-medium text-accentInk"
             >
               <PlusIcon />
-              新建会话
+              {t('chat.newSession')}
             </button>
             <div className="mt-4 min-h-0 flex-1 space-y-1 overflow-y-auto">
               {sessions.length === 0 && (
-                <p className="py-4 text-center text-xs text-ink-faint">暂无会话，先新建一个吧</p>
+                <p className="py-4 text-center text-xs text-ink-faint">{t('chat.noSessions')}</p>
               )}
               {sessions.map((s) => (
                 <div
@@ -767,7 +844,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                       e.stopPropagation();
                       removeSession(s.id);
                     }}
-                    aria-label={`删除会话 ${s.title}`}
+                    aria-label={t('chat.deleteSession', { title: s.title })}
                     className="shrink-0 cursor-pointer rounded-md p-1 text-ink-faint transition hover:bg-cinnabar/20 hover:text-cinnabar"
                   >
                     <TrashIcon />
@@ -779,7 +856,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         </div>
       )}
 
-      {/* 「我的 Key」设置弹窗 */}
+      {/* 「我的 Key」弹窗 */}
       {keyDialogOpen && (
         <ApiKeyDialog
           onClose={() => setKeyDialogOpen(false)}
@@ -789,6 +866,9 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           }}
         />
       )}
+
+      {/* 设置弹窗（外观 / 语言） */}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
@@ -803,10 +883,10 @@ function truncate(text: string, max = 120) {
  * 后端返回的文案（如「登录已失效，请重新登录」）已是给用户看的，优先透传；
  * 浏览器原生报错（Failed to fetch 等）则翻译成人话。
  */
-function friendlyClientError(err: unknown): string {
+function friendlyClientError(err: unknown, t: Translate): string {
   const raw = String((err as any)?.message ?? err ?? '').trim();
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
-    return '网络好像开小差了，检查一下网络或稍后再试试～';
+    return t('chat.networkError');
   }
-  return raw || '大圣这边出了点小状况，稍后再试一次吧～';
+  return raw || t('chat.unknownError');
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api, setToken, type User } from './api';
+import { useSettings } from './settings';
 
 /**
  * 登录 / 注册 / 忘记密码（暗黑中国神话主题，与聊天页同一套设计令牌）
@@ -46,14 +47,8 @@ function EyeIcon({ off }: { off?: boolean }) {
   );
 }
 
-const TITLES: Record<Mode, { title: string; sub: string }> = {
-  login: { title: '登录大圣助手', sub: '金箍棒在手，法宝随时调用' },
-  register: { title: '注册新账号', sub: '一个账号，开启七十二变' },
-  forgot: { title: '找回密码', sub: '验证账号与预留邮箱' },
-  reset: { title: '设置新密码', sub: '验证通过，请输入新密码' },
-};
-
 export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void }) {
+  const { t } = useSettings();
   const [mode, setMode] = useState<Mode>('login');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -79,12 +74,8 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
     setError('');
     setNotice('');
 
-    if (mode === 'register' && password !== confirm) {
-      setError('两次输入的密码不一致');
-      return;
-    }
-    if (mode === 'reset' && password !== confirm) {
-      setError('两次输入的密码不一致');
+    if ((mode === 'register' || mode === 'reset') && password !== confirm) {
+      setError(t('auth.passwordMismatch'));
       return;
     }
 
@@ -106,21 +97,26 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
         const res = await api.forgotPassword({ username, email });
         setResetToken(res.resetToken);
         switchMode('reset');
-        setNotice('验证通过！演示环境未接入邮件服务，重置令牌已生成并自动填入下一步。');
+        setNotice(t('auth.forgotNotice'));
         return;
       }
       // reset
       const res = await api.resetPassword({ token: resetToken, password });
       switchMode('login');
-      setNotice(`密码已重置，请用账号 ${res.username} 重新登录`);
+      setNotice(t('auth.resetNotice', { username: res.username }));
     } catch (err: any) {
-      setError(err?.message ?? '操作失败，请重试');
+      setError(err?.message ?? t('auth.failed'));
     } finally {
       setLoading(false);
     }
   };
 
-  const meta = TITLES[mode];
+  const meta = {
+    login: { title: t('auth.loginTitle'), sub: t('auth.loginSub') },
+    register: { title: t('auth.registerTitle'), sub: t('auth.registerSub') },
+    forgot: { title: t('auth.forgotTitle'), sub: t('auth.forgotSub') },
+    reset: { title: t('auth.resetTitle'), sub: t('auth.resetSub') },
+  }[mode];
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-night px-4 py-10">
@@ -149,12 +145,12 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
         >
           {/* 账号 */}
           {mode !== 'reset' && (
-            <Field label="账号" hint="3-20 位字母、数字或下划线">
+            <Field label={t('auth.username')} hint={t('auth.usernameHint')}>
               <input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoComplete="username"
-                placeholder="请输入账号"
+                placeholder={t('auth.usernamePlaceholder')}
                 className={inputCls}
                 required
               />
@@ -163,7 +159,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
 
           {/* 邮箱（找回密码时用于验证身份） */}
           {(mode === 'register' || mode === 'forgot') && (
-            <Field label="邮箱" hint="用于找回密码">
+            <Field label={t('auth.email')} hint={t('auth.emailHint')}>
               <input
                 type="email"
                 value={email}
@@ -177,11 +173,11 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
 
           {/* 昵称（仅注册） */}
           {mode === 'register' && (
-            <Field label="昵称" hint="选填，默认与账号相同">
+            <Field label={t('auth.nickname')} hint={t('auth.nicknameHint')}>
               <input
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
-                placeholder="怎么称呼你？"
+                placeholder={t('auth.nicknamePlaceholder')}
                 className={inputCls}
               />
             </Field>
@@ -189,21 +185,24 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
 
           {/* 密码 */}
           {mode !== 'forgot' && (
-            <Field label={mode === 'reset' ? '新密码' : '密码'} hint="至少 8 位">
+            <Field
+              label={mode === 'reset' ? t('auth.newPassword') : t('auth.password')}
+              hint={t('auth.passwordHint')}
+            >
               <div className="relative">
                 <input
                   type={showPwd ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  placeholder="请输入密码"
+                  placeholder={t('auth.passwordPlaceholder')}
                   className={`${inputCls} pr-10`}
                   required
                 />
                 <button
                   type="button"
                   onClick={() => setShowPwd((v) => !v)}
-                  aria-label={showPwd ? '隐藏密码' : '显示密码'}
+                  aria-label={showPwd ? t('auth.hidePassword') : t('auth.showPassword')}
                   className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-md p-1.5 text-ink-faint transition hover:text-gold"
                 >
                   <EyeIcon off={showPwd} />
@@ -214,12 +213,12 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
 
           {/* 确认密码 */}
           {(mode === 'register' || mode === 'reset') && (
-            <Field label="确认密码">
+            <Field label={t('auth.confirmPassword')}>
               <input
                 type={showPwd ? 'text' : 'password'}
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
-                placeholder="再输入一次密码"
+                placeholder={t('auth.confirmPlaceholder')}
                 className={inputCls}
                 required
               />
@@ -228,11 +227,11 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
 
           {/* 重置令牌（演示环境展示，便于直接复制） */}
           {mode === 'reset' && (
-            <Field label="重置令牌" hint="演示环境直接返回；接入邮件后由链接携带">
+            <Field label={t('auth.resetToken')} hint={t('auth.resetTokenHint')}>
               <input
                 value={resetToken}
                 onChange={(e) => setResetToken(e.target.value)}
-                placeholder="重置令牌"
+                placeholder={t('auth.resetTokenPlaceholder')}
                 className={`${inputCls} font-mono text-xs`}
                 required
               />
@@ -254,17 +253,17 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
           <button
             type="submit"
             disabled={loading}
-            className="w-full cursor-pointer rounded-xl bg-gold-gradient px-4 py-3 text-sm font-semibold text-night transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full cursor-pointer rounded-xl bg-gold-gradient px-4 py-3 text-sm font-semibold text-accentInk transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading
-              ? '处理中…'
+              ? t('auth.processing')
               : mode === 'login'
-                ? '登录'
+                ? t('auth.login')
                 : mode === 'register'
-                  ? '注册并登录'
+                  ? t('auth.registerAndLogin')
                   : mode === 'forgot'
-                    ? '验证身份'
-                    : '重置密码'}
+                    ? t('auth.verify')
+                    : t('auth.submitReset')}
           </button>
 
           {/* 模式切换 */}
@@ -276,14 +275,14 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
                   onClick={() => switchMode('register')}
                   className="cursor-pointer transition hover:text-gold"
                 >
-                  没有账号？立即注册
+                  {t('auth.toRegister')}
                 </button>
                 <button
                   type="button"
                   onClick={() => switchMode('forgot')}
                   className="cursor-pointer transition hover:text-gold"
                 >
-                  忘记密码？
+                  {t('auth.toForgot')}
                 </button>
               </>
             ) : (
@@ -292,7 +291,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
                 onClick={() => switchMode('login')}
                 className="cursor-pointer transition hover:text-gold"
               >
-                返回登录
+                {t('auth.backToLogin')}
               </button>
             )}
           </div>
@@ -301,7 +300,8 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
         {/* 演示账号提示 */}
         {mode === 'login' && (
           <p className="mt-4 text-center text-[11px] leading-relaxed text-ink-faint">
-            演示账号：<span className="text-ink-muted">demo / demo1234</span> ·
+            {t('auth.demoAccounts')}
+            <span className="text-ink-muted">demo / demo1234</span> ·
             <span className="text-ink-muted"> wukong / wukong1234</span>
           </p>
         )}

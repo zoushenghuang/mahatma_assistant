@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type ApiKeyStatus } from './api';
+import { useSettings } from './settings';
 
 /**
  * 「我的 Key」设置弹窗
@@ -56,6 +57,7 @@ export default function ApiKeyDialog({
   onClose: () => void;
   onSaved: (status: ApiKeyStatus) => void;
 }) {
+  const { t } = useSettings();
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
   const [value, setValue] = useState('');
   const [show, setShow] = useState(false);
@@ -72,7 +74,7 @@ export default function ApiKeyDialog({
     setError('');
     setNotice('');
     if (!value.trim()) {
-      setError('请输入 API Key');
+      setError(t('key.empty'));
       return;
     }
     setLoading(true);
@@ -80,10 +82,10 @@ export default function ApiKeyDialog({
       const next = await api.saveApiKey(value.trim());
       setStatus(next);
       setValue('');
-      setNotice('已保存，之后的对话都会用你自己的 Key');
+      setNotice(t('key.saved'));
       onSaved(next);
     } catch (err: any) {
-      setError(err?.message ?? '保存失败，请重试');
+      setError(err?.message ?? t('key.saveFailed'));
     } finally {
       setLoading(false);
     }
@@ -97,10 +99,10 @@ export default function ApiKeyDialog({
       const next = await api.deleteApiKey();
       setStatus(next);
       setValue('');
-      setNotice('已删除，需重新填写才能继续对话');
+      setNotice(t('key.removed'));
       onSaved(next);
     } catch (err: any) {
-      setError(err?.message ?? '删除失败，请重试');
+      setError(err?.message ?? t('key.removeFailed'));
     } finally {
       setLoading(false);
     }
@@ -116,13 +118,13 @@ export default function ApiKeyDialog({
               <KeyIcon className="h-4.5 w-4.5" />
             </span>
             <div>
-              <h2 className="font-display text-base font-bold text-gold-100">我的 API Key</h2>
-              <p className="text-[11px] text-ink-faint">仅用于你本人的对话，不会给其他账号使用</p>
+              <h2 className="font-display text-base font-bold text-gold-100">{t('key.title')}</h2>
+              <p className="text-[11px] text-ink-faint">{t('key.sub')}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            aria-label="关闭"
+            aria-label={t('common.close')}
             className="cursor-pointer rounded-lg p-1.5 text-ink-muted transition hover:text-ink"
           >
             <CloseIcon />
@@ -132,26 +134,26 @@ export default function ApiKeyDialog({
         {/* 当前状态 */}
         <div className="mb-4 rounded-xl border border-night-600 bg-night-900/60 px-3 py-2.5">
           <p className="text-xs text-ink-muted">
-            当前状态：
+            {t('key.statusLabel')}
             {status?.hasKey ? (
               <span className="ml-1 text-gold">
-                已设置 <span className="font-mono">{status.masked}</span>
+                {t('key.configured')} <span className="font-mono">{status.masked}</span>
               </span>
             ) : (
-              <span className="ml-1 text-cinnabar-400">未设置</span>
+              <span className="ml-1 text-cinnabar-400">{t('key.notConfigured')}</span>
             )}
           </p>
         </div>
 
         <form onSubmit={save} className="space-y-3">
           <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-muted">DeepSeek API Key</span>
+            <span className="mb-1.5 block text-xs font-medium text-ink-muted">{t('key.field')}</span>
             <div className="relative">
               <input
                 type={show ? 'text' : 'password'}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder={status?.hasKey ? '已保存，输入新的可覆盖' : 'sk-xxxxxxxxxxxxxxxx'}
+                placeholder={status?.hasKey ? t('key.placeholderReplace') : 'sk-xxxxxxxxxxxxxxxx'}
                 className="w-full rounded-xl border border-night-600 bg-night-900/70 px-3 py-2.5 pr-16 font-mono text-xs text-ink outline-none transition placeholder:text-ink-faint focus:border-gold/60 focus:shadow-glow-gold-sm"
               />
               <button
@@ -159,16 +161,12 @@ export default function ApiKeyDialog({
                 onClick={() => setShow((v) => !v)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-md px-2 py-1 text-[11px] text-ink-faint transition hover:text-gold"
               >
-                {show ? '隐藏' : '显示'}
+                {show ? t('key.hide') : t('key.show')}
               </button>
             </div>
           </label>
 
-          <p className="text-[11px] leading-relaxed text-ink-faint">
-            在
-            <span className="text-ink-muted"> platform.deepseek.com </span>
-            申请；服务端 AES-256-GCM 加密存储，列表/查询只返回脱敏值。
-          </p>
+          <p className="text-[11px] leading-relaxed text-ink-faint">{t('key.help')}</p>
 
           {error && (
             <p className="rounded-xl border border-cinnabar/40 bg-cinnabar/10 px-3 py-2 text-sm text-cinnabar-400">
@@ -185,9 +183,9 @@ export default function ApiKeyDialog({
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 cursor-pointer rounded-xl bg-gold-gradient px-4 py-2.5 text-sm font-semibold text-night transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex-1 cursor-pointer rounded-xl bg-gold-gradient px-4 py-2.5 text-sm font-semibold text-accentInk transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading ? '保存中…' : '保存'}
+              {loading ? t('key.saving') : t('key.save')}
             </button>
             {status?.hasKey && (
               <button
@@ -196,7 +194,7 @@ export default function ApiKeyDialog({
                 disabled={loading}
                 className="cursor-pointer rounded-xl border border-cinnabar/40 px-4 py-2.5 text-sm text-cinnabar-400 transition hover:bg-cinnabar/10 disabled:opacity-50"
               >
-                删除
+                {t('key.delete')}
               </button>
             )}
           </div>

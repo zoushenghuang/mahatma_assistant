@@ -2,7 +2,77 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ===== 大圣助手 · 全局基础 ===== */
+/* ===== 大圣助手 · 设计令牌（浅色 / 深色两套） =====
+   所有语义色都以「R G B 空格分隔」形式定义，供 Tailwind 的
+   rgb(var(--x) / <alpha-value>) 使用，从而支持 bg-night-800/60 这类透明度写法。 */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* 夜巡天庭 · 墨蓝黑底 */
+  --c-night: 10 12 18;
+  --c-night-900: 13 16 24;
+  --c-night-800: 18 21 30;
+  --c-night-700: 26 31 44;
+  --c-night-600: 35 42 59;
+
+  /* 云雾暖白 · 文字 */
+  --c-ink: 236 233 226;
+  --c-ink-muted: 139 144 160;
+  --c-ink-faint: 90 96 114;
+
+  /* 金箍棒金 */
+  --c-gold: 240 180 41;
+  --c-gold-100: 255 243 214;
+
+  /* 金色渐变上的文字（始终深色） */
+  --c-accent-ink: 10 12 18;
+
+  --bg-page:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(240, 180, 41, 0.08), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 110%, rgba(229, 72, 77, 0.05), transparent 60%),
+    linear-gradient(180deg, #0a0c12 0%, #0d1018 100%);
+
+  --shadow-panel: 0 8px 40px rgba(0, 0, 0, 0.35);
+  --scrollbar-thumb: #2a3142;
+  --scrollbar-thumb-hover: #3a4356;
+  --selection-bg: rgba(240, 180, 41, 0.3);
+  --selection-fg: #fff3d6;
+}
+
+/* 浅色：云雾白底 + 金晕点缀，保持同一套设计语言 */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --c-night: 245 246 250;
+  --c-night-900: 255 255 255;
+  --c-night-800: 255 255 255;
+  --c-night-700: 236 238 244;
+  --c-night-600: 214 218 230;
+
+  --c-ink: 28 33 48;
+  --c-ink-muted: 92 100 121;
+  --c-ink-faint: 134 141 160;
+
+  /* 浅色下金调深一档，保证文字/描边在白底上可读 */
+  --c-gold: 176 124 12;
+  --c-gold-100: 138 88 0;
+
+  --c-accent-ink: 10 12 18;
+
+  --bg-page:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(240, 180, 41, 0.18), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 110%, rgba(229, 72, 77, 0.07), transparent 60%),
+    linear-gradient(180deg, #f8f9fc 0%, #eef0f7 100%);
+
+  --shadow-panel: 0 10px 34px rgba(24, 30, 50, 0.12);
+  --scrollbar-thumb: #c6cbdb;
+  --scrollbar-thumb-hover: #aeb5c9;
+  --selection-bg: rgba(240, 180, 41, 0.35);
+  --selection-fg: #3a2a00;
+}
+
+/* ===== 全局基础 ===== */
 html,
 body,
 #root {
@@ -11,18 +81,14 @@ body,
 
 body {
   @apply bg-night font-sans text-ink antialiased;
-  /* 夜巡天庭：深邃背景 + 顶部金箍棒光晕 + 底部红晕 */
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(240, 180, 41, 0.08), transparent 60%),
-    radial-gradient(ellipse 60% 40% at 90% 110%, rgba(229, 72, 77, 0.05), transparent 60%),
-    linear-gradient(180deg, #0a0c12 0%, #0d1018 100%);
+  background-image: var(--bg-page);
   background-attachment: fixed;
 }
 
 /* 选择文字颜色 */
 ::selection {
-  background: rgba(240, 180, 41, 0.3);
-  color: #fff3d6;
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }
 
 /* ===== 滚动条美化 ===== */
@@ -34,11 +100,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a3142;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a4356;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* ===== 打字机光标 ===== */
@@ -54,7 +120,7 @@ body {
 .stream-caret::after {
   content: '▍';
   margin-left: 1px;
-  color: #f0b429;
+  color: rgb(var(--c-gold));
   animation: caret-blink 0.9s steps(1) infinite;
 }
 
