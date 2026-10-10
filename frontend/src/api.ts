@@ -49,11 +49,19 @@ export interface KnowledgeDoc {
   createdAt: number;
 }
 
+/** 一次对话消耗的 token 用量（工具循环会多轮请求，后端已累加） */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 // 后端通过 SSE 推送的事件
 export type SseEvent =
   | { type: 'content'; text: string }
   | { type: 'tool_start'; name: string }
   | { type: 'tool_end'; name: string; result: string }
+  | { type: 'usage'; usage: TokenUsage }
   | { type: 'done' }
   // message 已是面向用户的友好文案；fatal 为 false 时仅工具失败（对话继续）
   | { type: 'error'; message: string; fatal?: boolean };

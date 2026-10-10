@@ -38,11 +38,20 @@ export interface ToolContext {
   sessionId?: string;
 }
 
+// 一次对话消耗的 token 用量（由上游模型返回的 usage 汇总而来）
+export interface TokenUsage {
+  inputTokens: number; // 输入（提示词 + 历史 + 工具结果）
+  outputTokens: number; // 输出（模型生成）
+  totalTokens: number; // 合计
+}
+
 // 通过 SSE 推送给前端的事件类型
 export type AgentEvent =
   | { type: 'content'; text: string } // 文本增量（前端逐字渲染）
   | { type: 'tool_start'; name: string } // 开始执行工具
   | { type: 'tool_end'; name: string; result: string } // 工具执行完成
+  // 整轮对话的 token 用量：工具循环可能有多轮请求，这里是各轮累加后的总量
+  | { type: 'usage'; usage: TokenUsage }
   | { type: 'done' } // 整轮对话结束
   // 出错：message 已是面向用户的友好文案
   // fatal = true（默认）表示本轮对话失败，前端作为一条助手消息展示；

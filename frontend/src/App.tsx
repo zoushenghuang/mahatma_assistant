@@ -7,6 +7,7 @@ import {
   type ApiKeyStatus,
   type Session,
   type SseEvent,
+  type TokenUsage,
   type User,
 } from './api';
 import AuthPage from './AuthPage';
@@ -138,6 +139,24 @@ function ChevronIcon({ open, className = 'h-4 w-4' }: { open: boolean; className
   );
 }
 
+/** 闪电 · token 用量 */
+function BoltIcon({ className = 'h-3 w-3' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
+    </svg>
+  );
+}
+
 /** 滑杆 · 设置 */
 function SettingsIcon() {
   return (
@@ -258,6 +277,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [streaming, setStreaming] = useState(false);
   const [toolLog, setToolLog] = useState<ToolLogItem[]>([]);
   const [toolOpen, setToolOpen] = useState(true);
+  const [turnUsage, setTurnUsage] = useState<TokenUsage | null>(null); // 本轮 token 用量
   const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false); // 移动端会话抽屉
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -278,6 +298,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     abortRef.current?.abort();
     setActiveSessionId(id);
     setToolLog([]);
+    setTurnUsage(null);
     setStreaming(false);
     try {
       const history = await api.getMessages(id);
@@ -293,6 +314,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     abortRef.current?.abort();
     setMessages([]);
     setToolLog([]);
+    setTurnUsage(null);
     setStreaming(false);
     setInput('');
     try {
@@ -323,6 +345,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           setActiveSessionId(null);
           setMessages([]);
           setToolLog([]);
+          setTurnUsage(null);
           setStreaming(false);
         }
       }
@@ -373,6 +396,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setInput('');
     setStreaming(true);
     setToolLog([]);
+    setTurnUsage(null);
     setToolOpen(true);
 
     const ac = new AbortController();
@@ -401,6 +425,9 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           if (last) next[next.length - 1] = { ...last, result: e.result };
           return next;
         });
+      } else if (e.type === 'usage') {
+        // 整轮 token 用量（含工具循环的多轮请求），展示在法宝卡片旁
+        setTurnUsage(e.usage);
       } else if (e.type === 'error') {
         // 只是某个工具失败：记进法宝日志，对话继续
         if (e.fatal === false) {
@@ -753,6 +780,22 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* 本轮 token 用量（与法宝调用卡片相邻展示）*/}
+            {turnUsage && (
+              <div className="flex animate-fade-in justify-end">
+                <span
+                  title={t('chat.usageDetail', {
+                    input: turnUsage.inputTokens.toLocaleString(),
+                    output: turnUsage.outputTokens.toLocaleString(),
+                  })}
+                  className="inline-flex cursor-help items-center gap-1.5 rounded-lg border border-night-700/60 bg-night-900/60 px-2.5 py-1 font-mono text-[11px] text-ink-faint"
+                >
+                  <BoltIcon />
+                  {t('chat.usage', { total: turnUsage.totalTokens.toLocaleString() })}
+                </span>
               </div>
             )}
 

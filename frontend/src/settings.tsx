@@ -118,6 +118,8 @@ const zh = {
   'chat.footer': 'Function Calling + MCP · 会话上下文记忆（MySQL 持久化 · 按账号隔离）',
   'chat.networkError': '网络好像开小差了，检查一下网络或稍后再试试～',
   'chat.unknownError': '大圣这边出了点小状况，稍后再试一次吧～',
+  'chat.usage': '本次消耗 {total} tokens',
+  'chat.usageDetail': '输入 {input} tokens · 输出 {output} tokens',
   // 我的 Key 弹窗
   'key.title': '我的 API Key',
   'key.sub': '仅用于你本人的对话，不会给其他账号使用',
@@ -254,6 +256,8 @@ const en: Record<TKey, string> = {
   'chat.footer': 'Function Calling + MCP · persistent memory (MySQL, isolated per account)',
   'chat.networkError': 'Network hiccup — check your connection and try again.',
   'chat.unknownError': 'Something went wrong on our side. Please try again later.',
+  'chat.usage': '{total} tokens this turn',
+  'chat.usageDetail': 'Input {input} tokens · Output {output} tokens',
   'key.title': 'My API Key',
   'key.sub': 'Used only for your own conversations, never shared',
   'key.statusLabel': 'Status: ',

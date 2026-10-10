@@ -7,7 +7,7 @@ import { dispatchTool, getLangChainTools } from './tools/tools';
 import { MysqlChatHistory } from './history';
 import { getUserApiKey, type UserRow } from './db';
 import { sha256 } from './crypto';
-import type { AgentEvent } from './types';
+import type { AgentEvent, TokenUsage } from './types';
 
 /**
  * Agent（LangChain 版本）
@@ -156,14 +156,36 @@ export async function runChat(
   const history = new MysqlChatHistory(sessionId);
   const signal = options.signal;
 
+  // 本轮对话的 token 用量：工具循环会多次请求模型，这里把每轮的 usage 累加起来
+  const turnUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let hasUsage = false;
+  const collectUsage = (usage: TokenUsage | null) => {
+    if (!usage) return;
+    hasUsage = true;
+    turnUsage.inputTokens += usage.inputTokens;
+    turnUsage.outputTokens += usage.outputTokens;
+    turnUsage.totalTokens += usage.totalTokens;
+  };
+  const emitUsage = () => {
+    if (!hasUsage) return; // MOCK 模型不返回 usage，静默跳过
+    console.log(
+      `[Agent] 本轮 token 用量: 输入 ${turnUsage.inputTokens} / 输出 ${turnUsage.outputTokens} / 合计 ${turnUsage.totalTokens}`,
+    );
+    emit({ type: 'usage', usage: { ...turnUsage } });
+  };
+
   // ===== 第一轮：记忆链流式（用户消息 + 首轮 AI 输出由 RunnableWithMessageHistory 自动持久化）=====
-  let { toolCalls, text } = await streamModelRound(
+  const first = await streamModelRound(
     await withHistory.stream({ input: userText }, { configurable: { sessionId }, signal }),
     emit,
   );
+  let { toolCalls, text } = first;
+  collectUsage(first.usage);
+
   // 首轮若已直接作答（无工具调用），RunnableWithMessageHistory 已把本轮完整保存，直接结束
   if (toolCalls.length === 0) {
     console.log(`[Agent] 会话 ${sessionId.slice(0, 8)} 回复完成`);
+    emitUsage();
     return;
   }
 
@@ -203,6 +225,7 @@ export async function runChat(
     // 关键节点：LangChain —— 携带工具结果继续推理（从 MySQL 读回完整上下文）
     const messages = await history.getMessages();
     const next = await streamModelRound(await modelWithTools.stream(messages, { signal }), emit);
+    collectUsage(next.usage);
     toolCalls = next.toolCalls;
     text = next.text;
 
@@ -219,6 +242,7 @@ export async function runChat(
   }
 
   console.log(`[Agent] 会话 ${sessionId.slice(0, 8)} 回复完成`);
+  emitUsage();
 }
 
 interface PendingToolCall {
@@ -231,13 +255,15 @@ interface PendingToolCall {
  * 消费一个模型流：
  * - 文本增量：逐 chunk 经 emit 转发（token 级流式）
  * - tool_call_chunks：按 index 累积拼接，最后组装成完整工具调用列表
+ * - usage_metadata：记录本轮请求的 token 用量
  * 返回模型决定调用的工具（空数组 = 本轮直接作答，无需再循环）
  */
 async function streamModelRound(
   stream: AsyncIterable<any>,
   emit: (data: AgentEvent) => void,
-): Promise<{ toolCalls: PendingToolCall[]; text: string }> {
+): Promise<{ toolCalls: PendingToolCall[]; text: string; usage: TokenUsage | null }> {
   let text = '';
+  let usage: TokenUsage | null = null;
 
   // 按 index 累积工具调用：
   // - 流式形态：tool_call_chunks，args 是 JSON 字符串片段，需逐段拼接
@@ -246,6 +272,19 @@ async function streamModelRound(
   const acc = new Map<number, { id?: string; name?: string; args: string }>();
 
   for await (const chunk of stream) {
+    // 关键节点：token 用量 —— OpenAI 兼容接口（DeepSeek）会在流末尾的 chunk 上
+    // 返回 usage（LangChain 已自动携带 stream_options.include_usage），这里取最后一次
+    const meta = chunk?.usage_metadata;
+    if (meta && (meta.input_tokens || meta.output_tokens || meta.total_tokens)) {
+      const inputTokens = Number(meta.input_tokens ?? 0);
+      const outputTokens = Number(meta.output_tokens ?? 0);
+      usage = {
+        inputTokens,
+        outputTokens,
+        totalTokens: Number(meta.total_tokens ?? 0) || inputTokens + outputTokens,
+      };
+    }
+
     // 文本增量
     const content = chunk?.content;
     if (typeof content === 'string' && content.length > 0) {
@@ -289,5 +328,5 @@ async function streamModelRound(
     }
     toolCalls.push({ id: cur.id ?? '', name: cur.name, args });
   }
-  return { toolCalls, text };
+  return { toolCalls, text, usage };
 }
