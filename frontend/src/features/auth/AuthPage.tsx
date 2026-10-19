@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { api, setToken, type User } from './api';
-import { useSettings } from './settings';
+import { api, setToken, type User } from '@/api';
+import { EyeIcon, StaffLogo } from '@/components/icons';
+import { useSettings } from '@/features/settings/SettingsProvider';
 
 /**
  * 登录 / 注册 / 忘记密码（暗黑中国神话主题，与聊天页同一套设计令牌）
@@ -13,37 +14,26 @@ import { useSettings } from './settings';
 
 type Mode = 'login' | 'register' | 'forgot' | 'reset';
 
-/** 金箍棒徽章 */
-function StaffLogo({ className = 'h-12 w-12' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 40 40" className={className} aria-hidden="true">
-      <circle cx="20" cy="20" r="19" fill="#12151E" stroke="#F0B429" strokeWidth="1.5" />
-      <rect x="18" y="6" width="4" height="28" rx="2" fill="#F0B429" />
-      <rect x="14.5" y="9" width="11" height="4" rx="2" fill="#E5484D" />
-      <rect x="14.5" y="27" width="11" height="4" rx="2" fill="#E5484D" />
-      <path d="M20 3.5c1.5 2 1.5 3 0 4.5-1.5-1.5-1.5-2.5 0-4.5z" fill="#FFD97A" />
-      <path d="M20 32c1.5 2 1.5 3 0 4.5-1.5-1.5-1.5-2.5 0-4.5z" fill="#FFD97A" />
-    </svg>
-  );
-}
+const inputCls =
+  'w-full rounded-xl border border-night-600 bg-night-900/70 px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-faint focus:border-gold/60 focus:shadow-glow-gold-sm';
 
-/** 眼睛 · 显示/隐藏密码 */
-function EyeIcon({ off }: { off?: boolean }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-4 w-4"
-      aria-hidden="true"
-    >
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
-      <circle cx="12" cy="12" r="3" />
-      {off && <path d="M3 3l18 18" />}
-    </svg>
+    <label className="block">
+      <span className="mb-1.5 flex items-baseline gap-2">
+        <span className="text-xs font-medium text-ink-muted">{label}</span>
+        {hint && <span className="text-[11px] text-ink-faint">{hint}</span>}
+      </span>
+      {children}
+    </label>
   );
 }
 
@@ -104,8 +94,8 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
       const res = await api.resetPassword({ token: resetToken, password });
       switchMode('login');
       setNotice(t('auth.resetNotice', { username: res.username }));
-    } catch (err: any) {
-      setError(err?.message ?? t('auth.failed'));
+    } catch (err) {
+      setError((err as Error)?.message ?? t('auth.failed'));
     } finally {
       setLoading(false);
     }
@@ -307,28 +297,5 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
         )}
       </div>
     </div>
-  );
-}
-
-const inputCls =
-  'w-full rounded-xl border border-night-600 bg-night-900/70 px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-faint focus:border-gold/60 focus:shadow-glow-gold-sm';
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 flex items-baseline gap-2">
-        <span className="text-xs font-medium text-ink-muted">{label}</span>
-        {hint && <span className="text-[11px] text-ink-faint">{hint}</span>}
-      </span>
-      {children}
-    </label>
   );
 }

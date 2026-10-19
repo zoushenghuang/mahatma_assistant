@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type KnowledgeDoc } from './api';
-import DocumentViewer from './DocumentViewer';
-import { useSettings } from './settings';
+import { api, type KnowledgeDoc } from '@/api';
+import {
+  BookIcon,
+  CloseIcon,
+  EyeIcon,
+  FileIcon,
+  SearchIcon,
+  TrashIcon,
+  UploadIcon,
+} from '@/components/icons';
+import { Modal } from '@/components/ui/Modal';
+import DocumentViewer from '@/features/knowledge/DocumentViewer';
+import { useSettings } from '@/features/settings/SettingsProvider';
+import { formatSize } from '@/shared/lib/format';
+import { readAsBase64 } from './utils';
 
 /**
  * 「我的知识库」弹窗（RAG 数据源管理）
  *
  * 上传流程：前端把文件读成 base64 → POST /api/documents →
- * 后端解析文本 → 切分为若干片段（chunk）入 MySQL；
+ * 后端保存原文件、解析文本并切分为若干片段（chunk）入 MySQL；
  * 之后在对话中提问时，模型会通过 searchKnowledge 工具检索这些片段。
  *
  * 文档数据按 user_id 隔离，只对当前登录用户可见。
@@ -15,163 +27,6 @@ import { useSettings } from './settings';
 
 /** 单文件大小上限（与后端 FILE_MAX_BYTES 保持一致） */
 const MAX_MB = 8;
-
-/** 书本 · 知识库 */
-export function BookIcon({ className = 'h-4 w-4' }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-    </svg>
-  );
-}
-
-/** 上传 · 向上箭头 */
-function UploadIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-5 w-5"
-      aria-hidden="true"
-    >
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <path d="M17 8l-5-5-5 5" />
-      <path d="M12 3v12" />
-    </svg>
-  );
-}
-
-/** 文件 · 文档 */
-function FileIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-4 w-4"
-      aria-hidden="true"
-    >
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <path d="M14 2v6h6" />
-    </svg>
-  );
-}
-
-/** 垃圾桶 */
-function TrashIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-4 w-4"
-      aria-hidden="true"
-    >
-      <path d="M3 6h18" />
-      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-      <path d="M10 11v6M14 11v6" />
-    </svg>
-  );
-}
-
-/** 眼睛 · 查看 */
-function EyeIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-4 w-4"
-      aria-hidden="true"
-    >
-      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-/** 搜索 */
-function SearchIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-3.5 w-3.5"
-      aria-hidden="true"
-    >
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.2-3.2" />
-    </svg>
-  );
-}
-
-/** 关闭 */
-function CloseIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-4 w-4"
-      aria-hidden="true"
-    >
-      <path d="M18 6 6 18" />
-      <path d="m6 6 12 12" />
-    </svg>
-  );
-}
-
-/** 人类可读的文件大小 */
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** 读取本地文件为 base64（去掉 data URL 前缀） */
-function readAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result ?? '');
-      const comma = result.indexOf(',');
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(new Error('读取文件失败'));
-    reader.readAsDataURL(file);
-  });
-}
 
 export default function KnowledgeDialog({
   onClose,
@@ -211,15 +66,6 @@ export default function KnowledgeDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Esc 关闭（预览器打开时由预览器自己处理，避免两层一起关掉）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy && !viewing) onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, busy, viewing]);
-
   /** 逐个上传文件（串行，便于展示进度） */
   const uploadFiles = async (files: File[]) => {
     if (files.length === 0) return;
@@ -252,8 +98,8 @@ export default function KnowledgeDialog({
         } else {
           setNotice(t('knowledge.uploaded', { name: doc.filename, count: doc.chunkCount }));
         }
-      } catch (err: any) {
-        setError(err?.message ?? t('knowledge.uploadFailed'));
+      } catch (err) {
+        setError((err as Error)?.message ?? t('knowledge.uploadFailed'));
       }
     }
 
@@ -310,17 +156,24 @@ export default function KnowledgeDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/70" onClick={() => !busy && onClose()} />
-      <div className="relative z-10 flex max-h-[85vh] w-full max-w-xl flex-col animate-fade-up rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel">
+    <>
+      <Modal
+        onClose={onClose}
+        ariaLabel={t('knowledge.title')}
+        panelClassName="flex max-h-[85vh] w-full max-w-xl flex-col animate-fade-up rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel"
+        closeOnEscape={!busy && !viewing}
+        closeOnBackdrop={!busy}
+      >
         {/* 头部 */}
         <div className="mb-5 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-night-600 bg-gold/10 text-gold">
-              <BookIcon className="h-4 w-4" />
+              <BookIcon />
             </span>
             <div>
-              <h2 className="font-display text-base font-bold text-gold-100">{t('knowledge.title')}</h2>
+              <h2 className="font-display text-base font-bold text-gold-100">
+                {t('knowledge.title')}
+              </h2>
               <p className="text-[11px] text-ink-faint">{t('knowledge.sub')}</p>
             </div>
           </div>
@@ -359,7 +212,10 @@ export default function KnowledgeDialog({
           </span>
           <span className="text-[11px] text-ink-faint">{t('knowledge.dragHint')}</span>
           <span className="text-[11px] text-ink-faint">
-            {t('knowledge.uploadHint', { types: 'txt / md / json / csv / pdf / docx', size: MAX_MB })}
+            {t('knowledge.uploadHint', {
+              types: 'txt / md / json / csv / pdf / docx',
+              size: MAX_MB,
+            })}
           </span>
         </button>
         <input
@@ -392,7 +248,7 @@ export default function KnowledgeDialog({
             {docs.length > 0 && (
               <div className="relative min-w-0 max-w-[220px] flex-1">
                 <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint">
-                  <SearchIcon />
+                  <SearchIcon className="h-3.5 w-3.5" />
                 </span>
                 <input
                   value={search}
@@ -486,16 +342,12 @@ export default function KnowledgeDialog({
         <p className="mt-4 border-t border-night-700/60 pt-3 text-[11px] leading-relaxed text-ink-faint">
           {t('knowledge.usage')}
         </p>
-      </div>
+      </Modal>
 
       {/* 文档阅读器（覆盖在知识库弹窗之上） */}
       {viewing && (
-        <DocumentViewer
-          doc={viewing}
-          onClose={() => setViewing(null)}
-          onDeleted={removeLocally}
-        />
+        <DocumentViewer doc={viewing} onClose={() => setViewing(null)} onDeleted={removeLocally} />
       )}
-    </div>
+    </>
   );
 }
