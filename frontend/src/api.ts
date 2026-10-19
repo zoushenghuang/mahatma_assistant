@@ -42,6 +42,9 @@ export interface GeoLocation {
   longitude: number;
 }
 
+/** 文档预览类型（决定用哪种方式展示原文件） */
+export type DocKind = 'text' | 'pdf' | 'word' | 'image' | 'other';
+
 /** 知识库文档（RAG 数据源） */
 export interface KnowledgeDoc {
   id: string;
@@ -52,7 +55,25 @@ export interface KnowledgeDoc {
   chunkCount: number;
   status: 'pending' | 'ready' | 'failed';
   error: string | null;
+  /** 解析出的全文字符数 */
+  textLength: number;
+  /** 是否保留了原始文件（旧文档可能没有） */
+  hasOriginal: boolean;
+  kind: DocKind;
   createdAt: number;
+}
+
+/** 文档详情：元信息 + 全文（超长时截断） */
+export interface DocumentDetail extends KnowledgeDoc {
+  text: string;
+  /** 是否只返回了前面一段（完整内容走 /text） */
+  truncated: boolean;
+}
+
+/** 文档切片 */
+export interface DocumentChunk {
+  index: number;
+  content: string;
 }
 
 /** 一次对话消耗的 token 用量（工具循环会多轮请求，后端已累加） */
@@ -130,6 +151,21 @@ function post<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   });
+}
+
+/**
+ * 带鉴权的二进制请求（原文件 / 全文下载）。
+ * 浏览器无法给 <iframe> 直接加 Authorization 头，因此统一走 fetch → Blob / 文本。
+ */
+async function authedFetch(url: string): Promise<Response> {
+  const resp = await fetch(url, { headers: authHeaders() });
+  if (resp.status === 401) {
+    clearToken();
+    unauthorizedHandler?.();
+    throw new Error('登录已失效，请重新登录');
+  }
+  if (!resp.ok) throw new Error(await readError(resp));
+  return resp;
 }
 
 /**
@@ -234,7 +270,7 @@ export const api = {
   /** 加载会话历史（切换会话时展示） */
   getMessages: (id: string) => json<DisplayMessage[]>(`${BASE}/sessions/${id}/messages`),
 
-  // ===== 知识库（RAG）：上传 / 列表 / 删除（数据按用户隔离）=====
+  // ===== 知识库（RAG）：上传 / 列表 / 预览 / 删除（数据按用户隔离）=====
 
   /** 我的知识库文档列表 */
   listDocuments: () => json<KnowledgeDoc[]>(`${BASE}/documents`),
@@ -243,7 +279,19 @@ export const api = {
   uploadDocument: (input: { filename: string; mime: string; data: string }) =>
     post<KnowledgeDoc>(`${BASE}/documents`, input),
 
-  /** 删除文档（级联删除其分块） */
+  /** 文档详情（元信息 + 全文，超长会被截断） */
+  getDocument: (id: string) => json<DocumentDetail>(`${BASE}/documents/${id}`),
+
+  /** 文档切片（用于「切片」页签） */
+  getDocumentChunks: (id: string) => json<DocumentChunk[]>(`${BASE}/documents/${id}/chunks`),
+
+  /** 读取完整全文（纯文本） */
+  getDocumentText: async (id: string) => (await authedFetch(`${BASE}/documents/${id}/text`)).text(),
+
+  /** 读取原始文件（PDF / 图片可转 Blob URL 内联预览） */
+  getDocumentFile: async (id: string) => (await authedFetch(`${BASE}/documents/${id}/file`)).blob(),
+
+  /** 删除文档（级联删除其分块与原文件） */
   deleteDocument: (id: string) =>
     json<{ ok: boolean }>(`${BASE}/documents/${id}`, { method: 'DELETE' }),
 

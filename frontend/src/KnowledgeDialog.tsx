@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type KnowledgeDoc } from './api';
+import DocumentViewer from './DocumentViewer';
 import { useSettings } from './settings';
 
 /**
@@ -94,6 +95,44 @@ function TrashIcon() {
   );
 }
 
+/** 眼睛 · 查看 */
+function EyeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+      aria-hidden="true"
+    >
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+/** 搜索 */
+function SearchIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-3.5 w-3.5"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.2-3.2" />
+    </svg>
+  );
+}
+
 /** 关闭 */
 function CloseIcon() {
   return (
@@ -149,6 +188,9 @@ export default function KnowledgeDialog({
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [search, setSearch] = useState('');
+  /** 当前正在预览的文档（null = 未打开预览器） */
+  const [viewing, setViewing] = useState<KnowledgeDoc | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const sync = useCallback(
@@ -169,14 +211,14 @@ export default function KnowledgeDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Esc 关闭
+  // Esc 关闭（预览器打开时由预览器自己处理，避免两层一起关掉）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy) onClose();
+      if (e.key === 'Escape' && !busy && !viewing) onClose();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, busy]);
+  }, [onClose, busy, viewing]);
 
   /** 逐个上传文件（串行，便于展示进度） */
   const uploadFiles = async (files: File[]) => {
@@ -237,12 +279,24 @@ export default function KnowledgeDialog({
     setNotice('');
     try {
       await api.deleteDocument(doc.id);
+      if (viewing?.id === doc.id) setViewing(null);
       const list = await api.listDocuments();
       sync(list);
     } catch {
       setError(t('knowledge.removeFailed'));
     }
   };
+
+  /** 预览器里删除成功：本地同步，避免再拉一次列表 */
+  const removeLocally = (id: string) => {
+    setViewing(null);
+    sync(docs.filter((d) => d.id !== id));
+  };
+
+  const keyword = search.trim().toLowerCase();
+  const visibleDocs = keyword
+    ? docs.filter((d) => d.filename.toLowerCase().includes(keyword))
+    : docs;
 
   /** 状态徽标 */
   const statusBadge = (doc: KnowledgeDoc) => {
@@ -258,7 +312,7 @@ export default function KnowledgeDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70" onClick={() => !busy && onClose()} />
-      <div className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col animate-fade-up rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel">
+      <div className="relative z-10 flex max-h-[85vh] w-full max-w-xl flex-col animate-fade-up rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel">
         {/* 头部 */}
         <div className="mb-5 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -330,52 +384,102 @@ export default function KnowledgeDialog({
         )}
 
         {/* 文档列表 */}
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-          <div className="mb-2 flex items-center justify-between px-1">
-            <span className="text-[11px] font-medium uppercase tracking-widest text-ink-faint">
+        <div className="mt-4 flex min-h-0 flex-1 flex-col">
+          <div className="mb-2 flex items-center justify-between gap-2 px-1">
+            <span className="shrink-0 text-[11px] font-medium uppercase tracking-widest text-ink-faint">
               {t('knowledge.total', { count: docs.length })}
             </span>
+            {docs.length > 0 && (
+              <div className="relative min-w-0 max-w-[220px] flex-1">
+                <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint">
+                  <SearchIcon />
+                </span>
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t('knowledge.searchDocs')}
+                  className="w-full rounded-lg border border-night-600 bg-night-900/60 py-1 pl-7 pr-2 text-[11px] text-ink placeholder:text-ink-faint focus:border-gold/50 focus:outline-none"
+                />
+              </div>
+            )}
           </div>
 
-          {loading ? (
-            <p className="py-6 text-center text-xs text-ink-faint">{t('knowledge.processing')}</p>
-          ) : docs.length === 0 ? (
-            <p className="py-6 text-center text-xs text-ink-faint">{t('knowledge.empty')}</p>
-          ) : (
-            <div className="space-y-2">
-              {docs.map((doc) => (
-                <div
-                  key={doc.id}
-                  className="flex items-start gap-3 rounded-xl border border-night-700/60 bg-night-900/60 px-3 py-2.5"
-                >
-                  <span className="mt-0.5 shrink-0 text-ink-faint">
-                    <FileIcon />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-ink" title={doc.filename}>
-                      {doc.filename}
-                    </p>
-                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink-faint">
-                      <span>{statusBadge(doc)}</span>
-                      {doc.status === 'ready' && <span>· {t('knowledge.chunks', { count: doc.chunkCount })}</span>}
-                      <span>· {formatSize(doc.size)}</span>
-                    </p>
-                    {doc.status === 'failed' && doc.error && (
-                      <p className="mt-1 break-all text-[11px] leading-relaxed text-cinnabar-400">{doc.error}</p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => remove(doc)}
-                    disabled={busy}
-                    aria-label={t('knowledge.delete', { name: doc.filename })}
-                    className="shrink-0 cursor-pointer rounded-md p-1 text-ink-faint transition hover:bg-cinnabar/20 hover:text-cinnabar disabled:opacity-40"
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {loading ? (
+              <p className="py-6 text-center text-xs text-ink-faint">{t('knowledge.processing')}</p>
+            ) : docs.length === 0 ? (
+              <p className="py-6 text-center text-xs text-ink-faint">{t('knowledge.empty')}</p>
+            ) : visibleDocs.length === 0 ? (
+              <p className="py-6 text-center text-xs text-ink-faint">{t('knowledge.noMatch')}</p>
+            ) : (
+              <div className="space-y-2">
+                {visibleDocs.map((doc) => (
+                  <div
+                    key={doc.id}
+                    onClick={() => setViewing(doc)}
+                    className="group flex cursor-pointer items-start gap-3 rounded-xl border border-night-700/60 bg-night-900/60 px-3 py-2.5 transition hover:border-gold/40 hover:bg-night-900/90"
                   >
-                    <TrashIcon />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+                    <span className="mt-0.5 shrink-0 text-ink-faint transition group-hover:text-gold">
+                      <FileIcon />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setViewing(doc);
+                        }}
+                        className="block max-w-full cursor-pointer truncate text-left text-xs font-medium text-ink transition hover:text-gold group-hover:text-gold-100"
+                        title={doc.filename}
+                        aria-label={t('knowledge.view', { name: doc.filename })}
+                      >
+                        {doc.filename}
+                      </button>
+                      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink-faint">
+                        <span>{statusBadge(doc)}</span>
+                        {doc.status === 'ready' && (
+                          <span>· {t('knowledge.chunks', { count: doc.chunkCount })}</span>
+                        )}
+                        {doc.textLength > 0 && (
+                          <span>· {t('knowledge.characters', { count: doc.textLength })}</span>
+                        )}
+                        <span>· {formatSize(doc.size)}</span>
+                      </p>
+                      {doc.status === 'failed' && doc.error && (
+                        <p className="mt-1 break-all text-[11px] leading-relaxed text-cinnabar-400">
+                          {doc.error}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setViewing(doc);
+                        }}
+                        aria-label={t('knowledge.view', { name: doc.filename })}
+                        title={t('knowledge.view', { name: doc.filename })}
+                        className="cursor-pointer rounded-md p-1 text-ink-faint transition hover:bg-gold/15 hover:text-gold"
+                      >
+                        <EyeIcon />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          remove(doc);
+                        }}
+                        disabled={busy}
+                        aria-label={t('knowledge.delete', { name: doc.filename })}
+                        className="cursor-pointer rounded-md p-1 text-ink-faint transition hover:bg-cinnabar/20 hover:text-cinnabar disabled:opacity-40"
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* 使用提示 */}
@@ -383,6 +487,15 @@ export default function KnowledgeDialog({
           {t('knowledge.usage')}
         </p>
       </div>
+
+      {/* 文档阅读器（覆盖在知识库弹窗之上） */}
+      {viewing && (
+        <DocumentViewer
+          doc={viewing}
+          onClose={() => setViewing(null)}
+          onDeleted={removeLocally}
+        />
+      )}
     </div>
   );
 }

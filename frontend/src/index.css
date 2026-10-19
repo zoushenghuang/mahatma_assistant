@@ -245,6 +245,20 @@ body {
   @apply bg-night-700/60 font-medium text-ink;
 }
 
+/* ===== 文档预览：搜索命中的高亮 ===== */
+.doc-text mark {
+  background: rgba(240, 180, 41, 0.32);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  box-shadow: 0 0 0 1px rgba(240, 180, 41, 0.35);
+}
+.doc-text mark.active {
+  background: rgb(var(--c-gold));
+  color: rgb(var(--c-accent-ink));
+  box-shadow: 0 0 0 2px rgb(var(--c-gold) / 0.35);
+}
+
 /* ===== 代码高亮令牌（highlight.js → 主题色） ===== */
 .hljs-comment,
 .hljs-quote {

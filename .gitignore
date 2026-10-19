@@ -28,3 +28,6 @@ stats.html
 
 public/version.json
 public/libs/general*
+
+# 知识库上传的原始文件（本地运行产物，不入库）
+backend/data/uploads/

@@ -1,4 +1,7 @@
 import http from 'node:http';
+import { createReadStream } from 'node:fs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { config } from './config';
 import { runChat } from './agent';
 import {
@@ -7,22 +10,27 @@ import {
   deleteDocument,
   deleteSession,
   finalizeDocument,
+  getChunksByDocument,
   getDisplayRows,
+  getDocument,
+  getDocumentText,
   getSession,
   getUserApiKey,
   insertChunks,
   listDocuments,
   listSessions,
+  saveDocumentContent,
   setUserApiKey,
   touchSession,
   truncateFromDisplayIndex,
   updateSessionTitle,
+  type DocumentRow,
   type UserRow,
 } from './db';
 import { invalidateAgentCache } from './agent';
 import { isApiKeyRequired } from './llm';
 import { maskSecret } from './crypto';
-import { chunkText, extractText } from './knowledge';
+import { chunkText, docKind, extOf, extractText, mergeChunks } from './knowledge';
 import {
   AuthError,
   getUserFromRequest,
@@ -58,7 +66,11 @@ import type { AgentEvent } from './types';
  * - POST   /api/sessions/:id/edit        编辑重发（body: { displayIndex, message }）
  * - GET    /api/documents                我的知识库文档列表
  * - POST   /api/documents                上传文档（body: { filename, mime, data(base64) }）
- * - DELETE /api/documents/:id            删除文档（级联删分块）
+ * - GET    /api/documents/:id            文档详情（元信息 + 全文，超长截断）
+ * - GET    /api/documents/:id/text       文档全文（纯文本，供下载 / 按需加载）
+ * - GET    /api/documents/:id/chunks     文档切片（排查检索效果）
+ * - GET    /api/documents/:id/file       原始文件（PDF / 图片内联，其余附件下载）
+ * - DELETE /api/documents/:id            删除文档（级联删分块 + 清理原文件）
  * - POST   /api/chat                     对话 SSE（body: { sessionId, message }）
  */
 
@@ -283,15 +295,15 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // ===== 知识库（RAG）：文档上传 / 列表 / 删除 =====
+  // ===== 知识库（RAG）：文档上传 / 列表 / 预览 / 删除 =====
 
   // 文档列表
   if (req.method === 'GET' && url.pathname === '/api/documents') {
-    sendJson(res, 200, await listDocuments(user!.id));
+    sendJson(res, 200, (await listDocuments(user!.id)).map(toDocDto));
     return;
   }
 
-  // 上传文档：前端读文件为 base64，后端解码 → 解析文本 → 分块入库
+  // 上传文档：前端读文件为 base64，后端解码 → 存原文件 → 解析文本 → 分块入库
   if (req.method === 'POST' && url.pathname === '/api/documents') {
     const body = await readJson(req, UPLOAD_MAX_BYTES);
     const doc = await handleUpload(user!, body);
@@ -299,10 +311,71 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // 删除文档（级联删分块）
+  // 文档切片（「切片」页签 / 排查检索效果）
+  const docChunksMatch = url.pathname.match(/^\/api\/documents\/([\w-]+)\/chunks$/);
+  if (req.method === 'GET' && docChunksMatch) {
+    const doc = await getDocument(docChunksMatch[1], user!.id);
+    if (!doc) {
+      sendJson(res, 404, { error: '文档不存在或无权限' });
+      return;
+    }
+    sendJson(res, 200, await getChunksByDocument(doc.id, user!.id));
+    return;
+  }
+
+  // 文档全文（纯文本，供「下载全文」与超长文档的按需加载）
+  const docTextMatch = url.pathname.match(/^\/api\/documents\/([\w-]+)\/text$/);
+  if (req.method === 'GET' && docTextMatch) {
+    const doc = await getDocument(docTextMatch[1], user!.id);
+    if (!doc) {
+      sendJson(res, 404, { error: '文档不存在或无权限' });
+      return;
+    }
+    const text = await resolveDocumentText(doc, user!.id);
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': contentDisposition('inline', `${doc.filename}.txt`),
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(text);
+    return;
+  }
+
+  // 原始文件（PDF / 图片由浏览器内联渲染，其余作为附件下载）
+  const docFileMatch = url.pathname.match(/^\/api\/documents\/([\w-]+)\/file$/);
+  if (req.method === 'GET' && docFileMatch) {
+    await sendDocumentFile(res, user!.id, docFileMatch[1]);
+    return;
+  }
+
+  // 文档详情：元信息 + 解析全文（超长时截断，前端可再拉 /text 取全文）
   const docMatch = url.pathname.match(/^\/api\/documents\/([\w-]+)$/);
+  if (req.method === 'GET' && docMatch) {
+    const doc = await getDocument(docMatch[1], user!.id);
+    if (!doc) {
+      sendJson(res, 404, { error: '文档不存在或无权限' });
+      return;
+    }
+    const full = await resolveDocumentText(doc, user!.id);
+    const truncated = full.length > INLINE_TEXT_MAX;
+    sendJson(res, 200, {
+      ...toDocDto(doc),
+      text: truncated ? full.slice(0, INLINE_TEXT_MAX) : full,
+      textLength: full.length || doc.textLength,
+      truncated,
+    });
+    return;
+  }
+
+  // 删除文档（级联删分块 + 清理原文件）
   if (req.method === 'DELETE' && docMatch) {
+    const doc = await getDocument(docMatch[1], user!.id);
     const ok = await deleteDocument(docMatch[1], user!.id);
+    if (ok && doc?.storageKey) {
+      await fs
+        .unlink(path.join(config.uploadDir, path.basename(doc.storageKey)))
+        .catch(() => undefined);
+    }
     res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok }));
     return;
@@ -453,14 +526,113 @@ function makeTitle(text: string): string {
   return t.length > 20 ? `${t.slice(0, 20)}…` : t || '新对话';
 }
 
-// ===== 知识库上传 =====
+// ===== 知识库上传 / 预览 =====
 
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024; // 请求体上限（base64 编码后，约对应 8MB 原文件）
 const FILE_MAX_BYTES = 8 * 1024 * 1024; // 单文件原始大小上限
+const INLINE_TEXT_MAX = 200_000; // 详情接口单次返回的全文上限（约 20 万字符），超出走 /text
+
+/** 对外文档 DTO：隐藏服务器上的存储路径，只暴露「是否有原文件」 */
+function toDocDto(doc: DocumentRow) {
+  return {
+    id: doc.id,
+    userId: doc.userId,
+    filename: doc.filename,
+    mime: doc.mime,
+    size: doc.size,
+    chunkCount: doc.chunkCount,
+    status: doc.status,
+    error: doc.error,
+    textLength: doc.textLength,
+    hasOriginal: Boolean(doc.storageKey),
+    kind: docKind(doc.filename, doc.mime),
+    createdAt: doc.createdAt,
+  };
+}
 
 /**
- * 处理文档上传：先落库记录，再解析 / 分块 / 回填状态。
- * 解析失败也返回 200 + status='failed'，让前端展示失败原因，而不是整请求报错。
+ * 取文档全文：
+ * - 新文档直接读 documents.text_content；
+ * - 老版本上传的文档没有全文，则用切片拼回去（去重 overlap），并顺手回填写库。
+ */
+async function resolveDocumentText(doc: DocumentRow, userId: string): Promise<string> {
+  const saved = await getDocumentText(doc.id, userId);
+  if (saved !== null && saved !== '') return saved;
+
+  const chunks = await getChunksByDocument(doc.id, userId);
+  const merged = mergeChunks(chunks.map((c) => c.content));
+  if (merged) {
+    // 回填后，下次预览无需再拼接
+    await saveDocumentContent(doc.id, merged).catch(() => undefined);
+  }
+  return merged;
+}
+
+/** RFC 5987 文件名（兼容中文），避免 header 里直接出现非 ASCII */
+function contentDisposition(type: 'inline' | 'attachment', filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  markdown: 'text/markdown; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  csv: 'text/csv; charset=utf-8',
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+};
+
+/** 原文件响应：PDF / 图片可内联预览，其余下载 */
+async function sendDocumentFile(res: http.ServerResponse, userId: string, documentId: string) {
+  const doc = await getDocument(documentId, userId);
+  if (!doc) {
+    sendJson(res, 404, { error: '文档不存在或无权限' });
+    return;
+  }
+  if (!doc.storageKey) {
+    sendJson(res, 404, { error: '该文档上传于旧版本，未保留原始文件，请重新上传' });
+    return;
+  }
+
+  const file = path.join(config.uploadDir, path.basename(doc.storageKey));
+  let stat;
+  try {
+    stat = await fs.stat(file);
+  } catch {
+    sendJson(res, 404, { error: '原始文件已丢失，请重新上传' });
+    return;
+  }
+
+  const kind = docKind(doc.filename, doc.mime);
+  const mime = doc.mime || MIME_BY_EXT[extOf(doc.filename)] || 'application/octet-stream';
+  const inline = kind === 'pdf' || kind === 'image';
+
+  res.writeHead(200, {
+    'Content-Type': mime,
+    'Content-Length': stat.size,
+    'Content-Disposition': contentDisposition(inline ? 'inline' : 'attachment', doc.filename),
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'private, max-age=300',
+  });
+  const stream = createReadStream(file);
+  stream.on('error', () => res.destroy());
+  stream.pipe(res);
+}
+
+/**
+ * 处理文档上传：先落库记录 → 保存原文件 → 解析 / 分块 / 回填状态。
+ * 解析失败也返回 200 + status='failed'，让前端展示失败原因，而不是整请求报错；
+ * 此时原文件仍会保留，用户可以打开排查（如扫描件 PDF）。
  */
 async function handleUpload(user: UserRow, body: any) {
   const filename = String(body?.filename ?? '').trim();
@@ -485,19 +657,51 @@ async function handleUpload(user: UserRow, body: any) {
     status: 'pending',
   });
 
+  // 原文件落盘：文件名由服务端 UUID 生成，隔离用户目录注入风险
+  const ext = extOf(filename);
+  const storageKey = `${doc.id}${ext ? `.${ext.replace(/[^a-z0-9]/g, '')}` : ''}`;
+  let storedKey: string | null = null;
+  try {
+    await fs.mkdir(config.uploadDir, { recursive: true });
+    await fs.writeFile(path.join(config.uploadDir, storageKey), buffer);
+    storedKey = storageKey;
+  } catch (err: any) {
+    // 落盘失败不阻断解析，只是无法在线预览原文件
+    console.warn(`[知识库] 保存原文件失败（${filename}）: ${err?.message ?? err}`);
+  }
+
   try {
     const text = await extractText(filename, mime, buffer);
     const chunks = chunkText(text);
     if (chunks.length === 0) throw new Error('未能从文件中解析出文本内容（可能是空文件或扫描件）');
 
     await insertChunks(doc.id, user.id, chunks);
+    await saveDocumentContent(doc.id, text, storedKey);
     await finalizeDocument(doc.id, { chunkCount: chunks.length, status: 'ready' });
-    console.log(`[知识库] 用户 ${user.username} 上传《${filename}》，切分为 ${chunks.length} 块`);
-    return { ...doc, chunkCount: chunks.length, status: 'ready', error: null };
+    console.log(
+      `[知识库] 用户 ${user.username} 上传《${filename}》，${text.length} 字，切分为 ${chunks.length} 块`,
+    );
+    return toDocDto({
+      ...doc,
+      chunkCount: chunks.length,
+      status: 'ready',
+      error: null,
+      textLength: text.length,
+      storageKey: storedKey,
+    });
   } catch (err: any) {
     const message = err?.message ?? '解析失败';
     console.error(`[知识库] 解析《${filename}》失败: ${message}`);
+    // 解析失败也记录原文件标识，方便用户在预览器里打开原文件排查
+    await saveDocumentContent(doc.id, '', storedKey).catch(() => undefined);
     await finalizeDocument(doc.id, { chunkCount: 0, status: 'failed', error: message });
-    return { ...doc, chunkCount: 0, status: 'failed', error: message };
+    return toDocDto({
+      ...doc,
+      chunkCount: 0,
+      status: 'failed',
+      error: message,
+      textLength: 0,
+      storageKey: storedKey,
+    });
   }
 }

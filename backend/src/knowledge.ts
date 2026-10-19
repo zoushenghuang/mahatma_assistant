@@ -35,6 +35,51 @@ export function extOf(filename: string): string {
   return i >= 0 ? filename.slice(i + 1).toLowerCase() : '';
 }
 
+/** 文档预览类型：决定前端用哪种方式展示 */
+export type DocKind = 'text' | 'pdf' | 'word' | 'image' | 'other';
+
+/** 判断文档类型（原文件预览 / 下载用） */
+export function docKind(filename: string, mime: string): DocKind {
+  const ext = extOf(filename);
+  if (ext === 'pdf' || mime === 'application/pdf') return 'pdf';
+  if (
+    ext === 'doc' ||
+    ext === 'docx' ||
+    mime.includes('wordprocessingml') ||
+    mime.includes('msword')
+  ) {
+    return 'word';
+  }
+  if (mime.startsWith('image/')) return 'image';
+  if (TEXT_EXTS.has(ext) || mime.startsWith('text/') || mime === 'application/json') return 'text';
+  return 'other';
+}
+
+/**
+ * 把切片按顺序拼回全文（用于老文档的预览回退）。
+ * chunkText 相邻块带有 overlap，这里用「最长后缀 = 下一块前缀」去重，避免重复段落。
+ */
+export function mergeChunks(parts: string[]): string {
+  let out = '';
+  for (const part of parts) {
+    if (!part) continue;
+    if (!out) {
+      out = part;
+      continue;
+    }
+    const max = Math.min(part.length, 600, out.length);
+    let overlap = 0;
+    for (let i = max; i >= 1; i--) {
+      if (out.endsWith(part.slice(0, i))) {
+        overlap = i;
+        break;
+      }
+    }
+    out += part.slice(overlap);
+  }
+  return out;
+}
+
 /**
  * 从上传的二进制内容中抽取纯文本。
  * 文本类直接解码；PDF / DOCX 走可选解析器（动态加载，缺失则抛出可读错误）。

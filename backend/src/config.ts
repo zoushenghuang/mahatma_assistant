@@ -1,5 +1,10 @@
 // 加载 .env 文件内容到 process.env
 import 'dotenv/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** 后端项目根目录（src 的上一级），用于定位本地文件目录 */
+const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * 集中管理所有环境变量配置，后续代码统一从这里读取，
@@ -18,6 +23,11 @@ export const config = {
 
   // JWT 签名密钥（生产环境务必通过环境变量覆盖）
   authSecret: process.env.AUTH_SECRET ?? 'dev-secret-please-change-me',
+
+  // 知识库原始文件落盘目录（默认 backend/data/uploads，可由 UPLOAD_DIR 覆盖）
+  uploadDir: process.env.UPLOAD_DIR
+    ? path.resolve(process.env.UPLOAD_DIR)
+    : path.join(backendRoot, 'data', 'uploads'),
 
   // MySQL 连接配置（首次启动会自动建库建表）
   mysql: {

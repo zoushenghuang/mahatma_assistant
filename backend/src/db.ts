@@ -112,6 +112,9 @@ const DDL_DOCUMENTS = `
     chunk_count INT          NOT NULL DEFAULT 0,
     status      VARCHAR(16)  NOT NULL DEFAULT 'ready',
     error       TEXT         NULL,
+    text_content LONGTEXT    NULL,                -- 解析后的全文（供在线预览 / 全文搜索）
+    text_length  INT         NOT NULL DEFAULT 0,  -- 全文字符数（列表展示用，避免读 LONGTEXT）
+    storage_key  VARCHAR(255) NULL,               -- 原始文件在 uploads 目录下的文件名
     created_at  BIGINT       NOT NULL,
     PRIMARY KEY (id),
     KEY idx_documents_user (user_id, created_at),
@@ -172,6 +175,8 @@ export async function initDb(): Promise<void> {
   if (!(await hasColumn('users', 'api_key'))) {
     await pool.query(`ALTER TABLE users ADD COLUMN api_key TEXT NULL AFTER password_hash`);
   }
+  // 知识库预览：早期只存切片，补上全文 / 原文件字段（老文档仍可按切片回退预览）
+  await migrateDocumentsPreview();
 
   console.log(
     `[DB] MySQL 已就绪: ${config.mysql.user}@${config.mysql.host}:${config.mysql.port}/${config.mysql.database}`,
@@ -214,6 +219,24 @@ async function migrateSessionsOwner(): Promise<void> {
     // 键/约束可能已存在，忽略即可
   }
   console.log('[DB] sessions.user_id 迁移完成');
+}
+
+/**
+ * 迁移：documents 增加全文预览相关列
+ * - text_content：解析后的纯文本（在线预览 / 全文搜索）
+ * - text_length：字符数（列表展示，避免每次读 LONGTEXT）
+ * - storage_key：原始文件在 uploads 目录下的文件名
+ */
+async function migrateDocumentsPreview(): Promise<void> {
+  if (!(await hasColumn('documents', 'text_content'))) {
+    await pool.query(`ALTER TABLE documents ADD COLUMN text_content LONGTEXT NULL AFTER error`);
+  }
+  if (!(await hasColumn('documents', 'text_length'))) {
+    await pool.query(`ALTER TABLE documents ADD COLUMN text_length INT NOT NULL DEFAULT 0 AFTER text_content`);
+  }
+  if (!(await hasColumn('documents', 'storage_key'))) {
+    await pool.query(`ALTER TABLE documents ADD COLUMN storage_key VARCHAR(255) NULL AFTER text_length`);
+  }
 }
 
 /** 优雅关闭连接池（进程退出时调用） */
@@ -633,6 +656,9 @@ export interface DocumentRow {
   chunkCount: number;
   status: string; // ready | failed
   error: string | null;
+  textLength: number;
+  /** 原始文件在 uploads 目录下的文件名（null = 早期文档，未保留原文件） */
+  storageKey: string | null;
   createdAt: number;
 }
 
@@ -660,6 +686,8 @@ type DocumentDbRow = RowDataPacket & {
   chunk_count: number;
   status: string;
   error: string | null;
+  text_length: number;
+  storage_key: string | null;
   created_at: number;
 };
 
@@ -682,6 +710,8 @@ function toDocumentRow(r: DocumentDbRow): DocumentRow {
     chunkCount: Number(r.chunk_count),
     status: r.status,
     error: r.error ?? null,
+    textLength: Number(r.text_length ?? 0),
+    storageKey: r.storage_key ?? null,
     createdAt: Number(r.created_at),
   };
 }
@@ -712,6 +742,8 @@ export async function createDocument(input: {
     chunkCount: 0,
     status,
     error: input.error ?? null,
+    textLength: 0,
+    storageKey: null,
     createdAt: now,
   };
 }
@@ -756,24 +788,73 @@ export async function finalizeDocument(
   ]);
 }
 
-/** 某用户的知识库文档列表（最新在前） */
+/** 某用户的知识库文档列表（最新在前；不返回 LONGTEXT 全文） */
 export async function listDocuments(userId: string): Promise<DocumentRow[]> {
   const [rows] = await pool.query<DocumentDbRow[]>(
-    `SELECT id, user_id, filename, mime, size, chunk_count, status, error, created_at
+    `SELECT id, user_id, filename, mime, size, chunk_count, status, error,
+            text_length, storage_key, created_at
      FROM documents WHERE user_id = ? ORDER BY created_at DESC`,
     [userId],
   );
   return rows.map(toDocumentRow);
 }
 
-/** 按 id 查文档（传 userId 时校验归属） */
+/** 按 id 查文档（传 userId 时校验归属；不返回 LONGTEXT 全文） */
 export async function getDocument(id: string, userId?: string): Promise<DocumentRow | undefined> {
   const [rows] = await pool.query<DocumentDbRow[]>(
-    `SELECT id, user_id, filename, mime, size, chunk_count, status, error, created_at
+    `SELECT id, user_id, filename, mime, size, chunk_count, status, error,
+            text_length, storage_key, created_at
      FROM documents WHERE id = ? ${userId ? 'AND user_id = ?' : ''}`,
     userId ? [id, userId] : [id],
   );
   return rows[0] ? toDocumentRow(rows[0]) : undefined;
+}
+
+/**
+ * 保存解析后的全文与原始文件标识。
+ * @param storageKey 传 undefined 表示不动原文件字段（用于老文档回填全文）
+ */
+export async function saveDocumentContent(
+  id: string,
+  text: string,
+  storageKey?: string | null,
+): Promise<void> {
+  if (storageKey === undefined) {
+    await pool.query(`UPDATE documents SET text_content = ?, text_length = ? WHERE id = ?`, [
+      text,
+      text.length,
+      id,
+    ]);
+    return;
+  }
+  await pool.query(
+    `UPDATE documents SET text_content = ?, text_length = ?, storage_key = ? WHERE id = ?`,
+    [text, text.length, storageKey, id],
+  );
+}
+
+/** 读取文档全文（按用户校验归属） */
+export async function getDocumentText(id: string, userId: string): Promise<string | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT text_content FROM documents WHERE id = ? AND user_id = ?`,
+    [id, userId],
+  );
+  if (!rows[0]) return null;
+  const text = rows[0].text_content;
+  return typeof text === 'string' ? text : text === null ? null : String(text);
+}
+
+/** 某文档的全部切片（按顺序；按用户校验归属） */
+export async function getChunksByDocument(
+  documentId: string,
+  userId: string,
+): Promise<{ index: number; content: string }[]> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT chunk_index, content FROM doc_chunks
+     WHERE document_id = ? AND user_id = ? ORDER BY chunk_index ASC`,
+    [documentId, userId],
+  );
+  return rows.map((r) => ({ index: Number(r.chunk_index), content: String(r.content ?? '') }));
 }
 
 /** 删除文档（校验归属；外键级联删除其分块） */
