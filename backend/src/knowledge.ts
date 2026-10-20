@@ -141,7 +141,11 @@ async function extractDocx(buffer: Buffer): Promise<string> {
 
 /**
  * 把长文本切成带重叠的小块。
- * 切分优先落在段落 / 换行 / 句号处，尽量不截断语义。
+ *
+ * 两级策略：
+ * 1. Markdown 文档优先按 1-3 级标题切分，尽量保证「一个章节一个切片」，
+ *    避免两个主题被揉进同一块导致检索张冠李戴；
+ * 2. 单章节仍超长时，再按段落 / 句号边界切分并保留 overlap。
  *
  * @param size 单块目标字符数
  * @param overlap 相邻块重叠字符数（避免关键句正好被切断）
@@ -154,6 +158,30 @@ export function chunkText(text: string, size = 700, overlap = 80): string[] {
     .trim();
   if (!clean) return [];
 
+  const sections = splitMarkdownSections(clean);
+  if (sections.length <= 1) return chunkPlainText(clean, size, overlap);
+
+  const chunks: string[] = [];
+  for (const section of sections) {
+    if (section.length <= size) {
+      chunks.push(section);
+    } else {
+      chunks.push(...chunkPlainText(section, size, overlap));
+    }
+  }
+  return chunks;
+}
+
+/** 按 Markdown 标题切分章节（标题保留在所属章节开头） */
+function splitMarkdownSections(text: string): string[] {
+  return text
+    .split(/(?=^#{1,3}\s+)/m)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/** 无标题文本 / 超长章节：按段落和句子边界切分 */
+function chunkPlainText(clean: string, size: number, overlap: number): string[] {
   const chunks: string[] = [];
   let start = 0;
   while (start < clean.length) {
@@ -314,9 +342,10 @@ export async function searchKnowledge(
 
   // 3) 两路排名 → RRF 融合
   // 语义模型用配置阈值过滤噪声；本地哈希向量整体分偏低，阈值放宽
+  // 本地哈希向量的区分度低于语义模型：阈值放宽但必须过滤常见字带来的噪声
   const vectorThreshold = vectorSemantic
     ? config.embedding.minScore
-    : Math.min(config.embedding.minScore, 0.05);
+    : Math.min(config.embedding.minScore, 0.13);
   const keywordRanked = rankIndices(keywordScores, (score) => score > 0);
   const vectorRanked = vectorScores
     ? rankIndices(vectorScores, (score) => score >= vectorThreshold)
