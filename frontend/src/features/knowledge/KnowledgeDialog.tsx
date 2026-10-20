@@ -1,3 +1,4 @@
+import { Input, Tag } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type KnowledgeDoc } from '@/api';
 import {
@@ -5,10 +6,12 @@ import {
   CloseIcon,
   EyeIcon,
   FileIcon,
+  RefreshIcon,
   SearchIcon,
   TrashIcon,
   UploadIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import DocumentViewer from '@/features/knowledge/DocumentViewer';
 import { useSettings } from '@/features/settings/SettingsProvider';
@@ -39,6 +42,7 @@ export default function KnowledgeDialog({
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -139,6 +143,25 @@ export default function KnowledgeDialog({
     sync(docs.filter((d) => d.id !== id));
   };
 
+  /** 切换 embedding 模型后，重建全部文档的向量索引 */
+  const reindex = async () => {
+    setError('');
+    setNotice('');
+    setReindexing(true);
+    try {
+      const result = await api.reindexDocuments();
+      sync(await api.listDocuments());
+      setNotice(t('knowledge.reindexed', { updated: result.updated, model: result.model }));
+      if (result.failed > 0) {
+        setError(t('knowledge.reindexPartial', { failed: result.failed }));
+      }
+    } catch (err) {
+      setError((err as Error)?.message ?? t('knowledge.reindexFailed'));
+    } finally {
+      setReindexing(false);
+    }
+  };
+
   const keyword = search.trim().toLowerCase();
   const visibleDocs = keyword
     ? docs.filter((d) => d.filename.toLowerCase().includes(keyword))
@@ -160,7 +183,8 @@ export default function KnowledgeDialog({
       <Modal
         onClose={onClose}
         ariaLabel={t('knowledge.title')}
-        panelClassName="flex max-h-[85vh] w-full max-w-xl flex-col animate-fade-up rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel"
+        width={576}
+        panelClassName="flex max-h-[85vh] w-full flex-col rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel"
         closeOnEscape={!busy && !viewing}
         closeOnBackdrop={!busy}
       >
@@ -177,14 +201,30 @@ export default function KnowledgeDialog({
               <p className="text-[11px] text-ink-faint">{t('knowledge.sub')}</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            disabled={busy}
-            aria-label={t('knowledge.close')}
-            className="cursor-pointer rounded-lg p-1.5 text-ink-muted transition hover:text-ink disabled:opacity-40"
-          >
-            <CloseIcon />
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              variant="default"
+              size="small"
+              icon={<RefreshIcon className="h-3.5 w-3.5" />}
+              loading={reindexing}
+              disabled={busy || docs.length === 0}
+              title={t('knowledge.reindexTitle')}
+              onClick={reindex}
+              className="!text-[11px]"
+            >
+              <span className="hidden sm:inline">
+                {reindexing ? t('knowledge.reindexing') : t('knowledge.reindex')}
+              </span>
+            </Button>
+            <Button
+              variant="text"
+              size="small"
+              icon={<CloseIcon />}
+              aria-label={t('knowledge.close')}
+              disabled={busy}
+              onClick={onClose}
+            />
+          </div>
         </div>
 
         {/* 上传区（点击 / 拖拽） */}
@@ -246,17 +286,15 @@ export default function KnowledgeDialog({
               {t('knowledge.total', { count: docs.length })}
             </span>
             {docs.length > 0 && (
-              <div className="relative min-w-0 max-w-[220px] flex-1">
-                <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint">
-                  <SearchIcon className="h-3.5 w-3.5" />
-                </span>
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t('knowledge.searchDocs')}
-                  className="w-full rounded-lg border border-night-600 bg-night-900/60 py-1 pl-7 pr-2 text-[11px] text-ink placeholder:text-ink-faint focus:border-gold/50 focus:outline-none"
-                />
-              </div>
+              <Input
+                size="small"
+                allowClear
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t('knowledge.searchDocs')}
+                prefix={<SearchIcon className="h-3.5 w-3.5 text-ink-faint" />}
+                className="max-w-[220px]"
+              />
             )}
           </div>
 
@@ -294,7 +332,27 @@ export default function KnowledgeDialog({
                       <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink-faint">
                         <span>{statusBadge(doc)}</span>
                         {doc.status === 'ready' && (
+                          <Tag
+                            color={doc.embeddedChunks > 0 ? 'gold' : undefined}
+                            title={doc.embeddingModel ?? undefined}
+                            className="!m-0 !px-1 !text-[10px] !leading-4"
+                          >
+                            {doc.embeddedChunks > 0
+                              ? t('knowledge.vectorized')
+                              : t('knowledge.keywordMode')}
+                          </Tag>
+                        )}
+                        {doc.status === 'ready' && (
                           <span>· {t('knowledge.chunks', { count: doc.chunkCount })}</span>
+                        )}
+                        {doc.embeddedChunks > 0 && (
+                          <span>
+                            ·{' '}
+                            {t('knowledge.vectorCount', {
+                              count: doc.embeddedChunks,
+                              total: doc.chunkCount,
+                            })}
+                          </span>
                         )}
                         {doc.textLength > 0 && (
                           <span>· {t('knowledge.characters', { count: doc.textLength })}</span>
@@ -308,28 +366,29 @@ export default function KnowledgeDialog({
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5">
-                      <button
+                      <Button
+                        variant="text"
+                        size="small"
+                        icon={<EyeIcon />}
+                        aria-label={t('knowledge.view', { name: doc.filename })}
+                        title={t('knowledge.view', { name: doc.filename })}
                         onClick={(e) => {
                           e.stopPropagation();
                           setViewing(doc);
                         }}
-                        aria-label={t('knowledge.view', { name: doc.filename })}
-                        title={t('knowledge.view', { name: doc.filename })}
-                        className="cursor-pointer rounded-md p-1 text-ink-faint transition hover:bg-gold/15 hover:text-gold"
-                      >
-                        <EyeIcon />
-                      </button>
-                      <button
+                      />
+                      <Button
+                        variant="text"
+                        size="small"
+                        icon={<TrashIcon />}
+                        aria-label={t('knowledge.delete', { name: doc.filename })}
+                        disabled={busy}
                         onClick={(e) => {
                           e.stopPropagation();
                           remove(doc);
                         }}
-                        disabled={busy}
-                        aria-label={t('knowledge.delete', { name: doc.filename })}
-                        className="cursor-pointer rounded-md p-1 text-ink-faint transition hover:bg-cinnabar/20 hover:text-cinnabar disabled:opacity-40"
-                      >
-                        <TrashIcon />
-                      </button>
+                        className="!text-cinnabar-400"
+                      />
                     </div>
                   </div>
                 ))}

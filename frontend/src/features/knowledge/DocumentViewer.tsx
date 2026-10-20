@@ -1,6 +1,8 @@
+import { Alert, Input, Tabs, Tag, Tooltip } from 'antd';
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type DocumentChunk, type DocumentDetail, type KnowledgeDoc } from '@/api';
 import { CloseIcon, DownloadIcon, SearchIcon, TrashIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import { formatSize, saveBlob } from '@/shared/lib/format';
@@ -207,7 +209,8 @@ export default function DocumentViewer({
       onClose={onClose}
       ariaLabel={doc.filename}
       layer="top"
-      panelClassName="flex h-[88vh] w-full max-w-5xl flex-col overflow-hidden animate-fade-up rounded-2xl border border-night-600 bg-night-800 shadow-panel"
+      width="min(1024px, calc(100vw - 32px))"
+      panelClassName="flex h-[88vh] w-full flex-col overflow-hidden rounded-2xl border border-night-600 bg-night-800 shadow-panel"
     >
       {/* 头部 */}
       <div className="flex shrink-0 items-start justify-between gap-4 border-b border-night-700/60 px-5 py-3.5">
@@ -226,6 +229,18 @@ export default function DocumentViewer({
                 chunks: doc.chunkCount,
               })}
             </span>
+            {doc.embeddedChunks > 0 && (
+              <Tag
+                color="gold"
+                title={doc.embeddingModel ?? undefined}
+                className="!m-0 !px-1 !text-[10px] !leading-4"
+              >
+                {t('knowledge.vectorCount', {
+                  count: doc.embeddedChunks,
+                  total: doc.chunkCount,
+                })}
+              </Tag>
+            )}
             {doc.status === 'failed' && (
               <span className="text-cinnabar-400">· {t('knowledge.statusFailed')}</span>
             )}
@@ -234,124 +249,129 @@ export default function DocumentViewer({
 
         <div className="flex shrink-0 items-center gap-1.5">
           {doc.hasOriginal && (
-            <button
+            <Button
+              variant="default"
+              size="small"
+              icon={<DownloadIcon />}
               onClick={downloadOriginal}
-              title={t('viewer.downloadOriginal')}
-              className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-night-600 px-2.5 py-1.5 text-[11px] text-ink-muted transition hover:border-gold/40 hover:text-gold"
+              className="!text-[11px]"
             >
-              <DownloadIcon />
               <span className="hidden sm:inline">{t('viewer.downloadOriginal')}</span>
-            </button>
+            </Button>
           )}
           {doc.textLength > 0 && (
-            <button
+            <Button
+              variant="default"
+              size="small"
+              icon={<DownloadIcon />}
               onClick={downloadText}
-              title={t('viewer.downloadText')}
-              className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-night-600 px-2.5 py-1.5 text-[11px] text-ink-muted transition hover:border-gold/40 hover:text-gold"
+              className="!text-[11px]"
             >
-              <DownloadIcon />
               <span className="hidden sm:inline">{t('viewer.downloadText')}</span>
-            </button>
+            </Button>
           )}
-          <button
-            onClick={remove}
-            title={t('viewer.delete')}
-            aria-label={t('viewer.delete')}
-            className="cursor-pointer rounded-lg border border-night-600 p-1.5 text-ink-muted transition hover:border-cinnabar/50 hover:bg-cinnabar/10 hover:text-cinnabar-400"
-          >
-            <TrashIcon />
-          </button>
-          <button
-            onClick={onClose}
-            title={t('viewer.close')}
-            aria-label={t('viewer.close')}
-            className="cursor-pointer rounded-lg p-1.5 text-ink-muted transition hover:text-ink"
-          >
-            <CloseIcon />
-          </button>
+          <Tooltip title={t('viewer.delete')}>
+            <Button
+              variant="text"
+              size="small"
+              icon={<TrashIcon />}
+              aria-label={t('viewer.delete')}
+              onClick={remove}
+              className="!text-cinnabar-400"
+            />
+          </Tooltip>
+          <Tooltip title={t('viewer.close')}>
+            <Button
+              variant="text"
+              size="small"
+              icon={<CloseIcon />}
+              aria-label={t('viewer.close')}
+              onClick={onClose}
+            />
+          </Tooltip>
         </div>
       </div>
 
       {/* 页签 + 文档内搜索 */}
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-night-700/60 px-5 py-2">
-        <div className="flex items-center gap-1 rounded-lg border border-night-700 bg-night-900/60 p-0.5">
-          {tabs.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => setTab(item.key)}
-              aria-selected={tab === item.key}
-              role="tab"
-              className={`cursor-pointer rounded-md px-3 py-1 text-xs transition ${
-                tab === item.key
-                  ? 'bg-gold/15 font-medium text-gold'
-                  : 'text-ink-muted hover:text-ink'
-              }`}
-            >
+      <Tabs
+        size="small"
+        activeKey={tab}
+        onChange={(key) => setTab(key as Tab)}
+        className="shrink-0 border-b border-night-700/60 px-5"
+        tabBarStyle={{ marginBottom: 0 }}
+        items={tabs.map((item) => ({
+          key: item.key,
+          label: (
+            <span>
               {item.label}
               {item.key === 'chunks' && doc.chunkCount > 0 && (
                 <span className="ml-1 text-[10px] text-ink-faint">{doc.chunkCount}</span>
               )}
-            </button>
-          ))}
-        </div>
-
-        {tab === 'text' && (
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <div className="relative min-w-0 flex-1 sm:max-w-xs">
-              <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint">
-                <SearchIcon className="h-3.5 w-3.5" />
-              </span>
-              <input
+            </span>
+          ),
+        }))}
+        tabBarExtraContent={
+          tab === 'text' ? (
+            <div className="flex items-center gap-2 pb-1">
+              <Input
+                size="small"
+                allowClear
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t('viewer.searchPlaceholder')}
-                className="w-full rounded-lg border border-night-600 bg-night-900/60 py-1.5 pl-8 pr-2.5 text-xs text-ink placeholder:text-ink-faint focus:border-gold/50 focus:outline-none"
+                prefix={<SearchIcon className="h-3.5 w-3.5 text-ink-faint" />}
+                className="w-48"
               />
+              {query.trim() && (
+                <div className="flex shrink-0 items-center gap-1 text-[11px] text-ink-faint">
+                  <span className={markup.count === 0 ? 'text-cinnabar-400' : 'text-ink-muted'}>
+                    {markup.count === 0
+                      ? t('viewer.noMatch')
+                      : t('viewer.matchPos', {
+                          current: Math.min(matchIndex + 1, markup.count),
+                          total: markup.count,
+                        })}
+                  </span>
+                  <Tooltip title={t('viewer.prevMatch')}>
+                    <Button
+                      variant="text"
+                      size="small"
+                      className="!px-1"
+                      disabled={markup.count === 0}
+                      onClick={() =>
+                        setMatchIndex((i) => (i - 1 + markup.count) % Math.max(markup.count, 1))
+                      }
+                    >
+                      ↑
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title={t('viewer.nextMatch')}>
+                    <Button
+                      variant="text"
+                      size="small"
+                      className="!px-1"
+                      disabled={markup.count === 0}
+                      onClick={() => setMatchIndex((i) => (i + 1) % Math.max(markup.count, 1))}
+                    >
+                      ↓
+                    </Button>
+                  </Tooltip>
+                </div>
+              )}
             </div>
-            {query.trim() && (
-              <div className="flex shrink-0 items-center gap-1 text-[11px] text-ink-faint">
-                <span className={markup.count === 0 ? 'text-cinnabar-400' : 'text-ink-muted'}>
-                  {markup.count === 0
-                    ? t('viewer.noMatch')
-                    : t('viewer.matchPos', {
-                        current: Math.min(matchIndex + 1, markup.count),
-                        total: markup.count,
-                      })}
-                </span>
-                <button
-                  onClick={() =>
-                    setMatchIndex((i) => (i - 1 + markup.count) % Math.max(markup.count, 1))
-                  }
-                  disabled={markup.count === 0}
-                  title={t('viewer.prevMatch')}
-                  className="cursor-pointer rounded px-1 hover:text-gold disabled:opacity-40"
-                >
-                  ↑
-                </button>
-                <button
-                  onClick={() => setMatchIndex((i) => (i + 1) % Math.max(markup.count, 1))}
-                  disabled={markup.count === 0}
-                  title={t('viewer.nextMatch')}
-                  className="cursor-pointer rounded px-1 hover:text-gold disabled:opacity-40"
-                >
-                  ↓
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+          ) : undefined
+        }
+      />
 
       {/* 提示条 */}
-      {error && (
-        <p className="mx-5 mt-3 shrink-0 rounded-xl border border-cinnabar/40 bg-cinnabar/10 px-3 py-2 text-xs text-cinnabar-400">
-          {error}
-        </p>
-      )}
+      {error && <Alert type="error" showIcon message={error} className="mx-5 mt-3 shrink-0" />}
       {doc.status === 'failed' && doc.error && (
-        <p className="mx-5 mt-3 shrink-0 rounded-xl border border-cinnabar/40 bg-cinnabar/10 px-3 py-2 text-xs text-cinnabar-400">
-          {t('viewer.parseFailed', { message: doc.error })}
-        </p>
+        <Alert
+          type="error"
+          showIcon
+          message={t('viewer.parseFailed', { message: doc.error })}
+          className="mx-5 mt-3 shrink-0"
+        />
       )}
 
       {/* 内容区 */}
@@ -363,12 +383,9 @@ export default function DocumentViewer({
             {truncation && (
               <div className="mx-5 mt-3 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-gold/30 bg-gold/10 px-3 py-2 text-[11px] text-gold-100">
                 <span>{t('viewer.truncated', { count: detail?.text.length ?? 0 })}</span>
-                <button
-                  onClick={loadFull}
-                  className="cursor-pointer rounded-md border border-gold/40 px-2 py-0.5 font-medium transition hover:bg-gold/15"
-                >
+                <Button size="small" onClick={loadFull}>
                   {t('viewer.loadFull')}
-                </button>
+                </Button>
               </div>
             )}
             {text ? (
@@ -404,12 +421,14 @@ export default function DocumentViewer({
                           {t('knowledge.characters', { count: chunk.content.length })}
                         </span>
                       </span>
-                      <button
+                      <Button
+                        variant="link"
+                        size="small"
+                        className="!px-1 !text-[10px] opacity-0 group-hover:opacity-100"
                         onClick={() => copyChunk(chunk)}
-                        className="cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-ink-faint opacity-0 transition hover:text-gold group-hover:opacity-100"
                       >
                         {copied === chunk.index ? t('viewer.copied') : t('viewer.copyChunk')}
-                      </button>
+                      </Button>
                     </div>
                     <p className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-ink-muted">
                       {chunk.content}
@@ -448,13 +467,9 @@ export default function DocumentViewer({
                 <p className="text-xs leading-relaxed text-ink-faint">
                   {doc.kind === 'text' ? t('viewer.textOriginalHint') : t('viewer.fileUnsupported')}
                 </p>
-                <button
-                  onClick={downloadOriginal}
-                  className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-gold/40 bg-gold/10 px-3 py-1.5 text-xs font-medium text-gold transition hover:bg-gold/20"
-                >
-                  <DownloadIcon />
+                <Button icon={<DownloadIcon />} onClick={downloadOriginal}>
                   {t('viewer.downloadOriginal')}
-                </button>
+                </Button>
               </div>
             )}
           </div>

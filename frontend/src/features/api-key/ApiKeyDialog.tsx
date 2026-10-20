@@ -1,6 +1,8 @@
+import { Input } from 'antd';
 import { useEffect, useState } from 'react';
 import { api, type ApiKeyStatus } from '@/api';
 import { CloseIcon, KeyIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { useSettings } from '@/features/settings/SettingsProvider';
 
@@ -21,7 +23,6 @@ export default function ApiKeyDialog({
   const { t } = useSettings();
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
   const [value, setValue] = useState('');
-  const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -73,7 +74,13 @@ export default function ApiKeyDialog({
   };
 
   return (
-    <Modal onClose={onClose} ariaLabel={t('key.title')} closeOnEscape={!loading}>
+    <Modal
+      onClose={onClose}
+      ariaLabel={t('key.title')}
+      width={448}
+      panelClassName="w-full rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel"
+      closeOnEscape={!loading}
+    >
       <div className="mb-5 flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-night-600 bg-gold/10 text-gold">
@@ -84,13 +91,13 @@ export default function ApiKeyDialog({
             <p className="text-[11px] text-ink-faint">{t('key.sub')}</p>
           </div>
         </div>
-        <button
-          onClick={onClose}
+        <Button
+          variant="text"
+          size="small"
+          icon={<CloseIcon />}
           aria-label={t('common.close')}
-          className="cursor-pointer rounded-lg p-1.5 text-ink-muted transition hover:text-ink"
-        >
-          <CloseIcon />
-        </button>
+          onClick={onClose}
+        />
       </div>
 
       {/* 当前状态 */}
@@ -110,22 +117,12 @@ export default function ApiKeyDialog({
       <form onSubmit={save} className="space-y-3">
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-muted">{t('key.field')}</span>
-          <div className="relative">
-            <input
-              type={show ? 'text' : 'password'}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder={status?.hasKey ? t('key.placeholderReplace') : 'sk-xxxxxxxxxxxxxxxx'}
-              className="w-full rounded-xl border border-night-600 bg-night-900/70 px-3 py-2.5 pr-16 font-mono text-xs text-ink outline-none transition placeholder:text-ink-faint focus:border-gold/60 focus:shadow-glow-gold-sm"
-            />
-            <button
-              type="button"
-              onClick={() => setShow((v) => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-md px-2 py-1 text-[11px] text-ink-faint transition hover:text-gold"
-            >
-              {show ? t('key.hide') : t('key.show')}
-            </button>
-          </div>
+          <Input.Password
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={status?.hasKey ? t('key.placeholderReplace') : 'sk-xxxxxxxxxxxxxxxx'}
+            className="font-mono"
+          />
         </label>
 
         <p className="text-[11px] leading-relaxed text-ink-faint">{t('key.help')}</p>
@@ -142,22 +139,19 @@ export default function ApiKeyDialog({
         )}
 
         <div className="flex gap-2 pt-1">
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex-1 cursor-pointer rounded-xl bg-gold-gradient px-4 py-2.5 text-sm font-semibold text-accentInk transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-50"
+          <Button
+            variant="primary"
+            htmlType="submit"
+            loading={loading}
+            block
+            className="!font-semibold"
           >
             {loading ? t('key.saving') : t('key.save')}
-          </button>
+          </Button>
           {status?.hasKey && (
-            <button
-              type="button"
-              onClick={remove}
-              disabled={loading}
-              className="cursor-pointer rounded-xl border border-cinnabar/40 px-4 py-2.5 text-sm text-cinnabar-400 transition hover:bg-cinnabar/10 disabled:opacity-50"
-            >
+            <Button variant="danger" onClick={remove} loading={loading}>
               {t('key.delete')}
-            </button>
+            </Button>
           )}
         </div>
       </form>

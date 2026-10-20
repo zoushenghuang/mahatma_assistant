@@ -1,5 +1,5 @@
 import { authedFetch, post, requestJson } from './client';
-import type { DocumentChunk, DocumentDetail, KnowledgeDoc } from './types';
+import type { DocumentChunk, DocumentDetail, KnowledgeDoc, ReindexResult } from './types';
 
 /** 我的知识库文档列表 */
 export function listDocuments(): Promise<KnowledgeDoc[]> {
@@ -23,6 +23,11 @@ export function getDocument(id: string): Promise<DocumentDetail> {
 /** 文档切片（用于「切片」页签） */
 export function getDocumentChunks(id: string): Promise<DocumentChunk[]> {
   return requestJson<DocumentChunk[]>(`/documents/${id}/chunks`);
+}
+
+/** 重建全部文档的向量索引（切换 embedding 模型后使用） */
+export function reindexDocuments(): Promise<ReindexResult> {
+  return post<ReindexResult>('/documents/reindex', {});
 }
 
 /** 读取完整全文（纯文本） */

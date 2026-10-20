@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { Dropdown, type MenuProps } from 'antd';
+import { useState, type ReactNode } from 'react';
 import type { User } from '@/api';
 import {
   BookIcon,
@@ -10,7 +11,6 @@ import {
   StaffLogo,
 } from '@/components/icons';
 import { useSettings } from '@/features/settings/SettingsProvider';
-import { useOnClickOutside } from '@/shared/hooks/useOnClickOutside';
 
 /** 顶部栏：会话入口 + 当前标题 + 知识库 / Key / 用户菜单 */
 export function ChatHeader({
@@ -36,10 +36,38 @@ export function ChatHeader({
 }) {
   const { t } = useSettings();
   const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  useOnClickOutside(menuRef, () => setMenuOpen(false), menuOpen);
 
   const displayName = user.nickname || user.username;
+
+  /**
+   * antd 会把 Menu 图标的 className 覆盖成 ant-dropdown-menu-item-icon，
+   * 直接传 <SettingsIcon /> 会丢掉 h-4 w-4 导致 SVG 被拉伸撑满菜单。
+   * 这里用 span 包一层把尺寸约束在 16px（内部 svg 保留 Tailwind 尺寸）。
+   */
+  const menuIcon = (node: ReactNode) => (
+    <span className="flex h-4 w-4 items-center justify-center">{node}</span>
+  );
+
+  const menuItems: MenuProps['items'] = [
+    {
+      key: 'profile',
+      type: 'group',
+      label: (
+        <div className="px-1 py-0.5">
+          <p className="truncate text-xs font-medium text-ink">{displayName}</p>
+          <p className="truncate text-[11px] text-ink-faint">{user.email}</p>
+        </div>
+      ),
+    },
+    { type: 'divider' },
+    { key: 'settings', icon: menuIcon(<SettingsIcon />), label: t('common.settings') },
+    {
+      key: 'logout',
+      icon: menuIcon(<LogoutIcon />),
+      label: t('common.logout'),
+      danger: true,
+    },
+  ];
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-night-700/60 bg-night-900/40 px-4 backdrop-blur">
@@ -102,9 +130,20 @@ export function ChatHeader({
         </button>
 
         {/* 头像 → 下拉菜单（设置 / 退出登录） */}
-        <div className="relative" ref={menuRef}>
+        <Dropdown
+          menu={{
+            items: menuItems,
+            onClick: ({ key }) => {
+              if (key === 'settings') onOpenSettings();
+              if (key === 'logout') onLogout();
+            },
+          }}
+          trigger={['click']}
+          placement="bottomRight"
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
+        >
           <button
-            onClick={() => setMenuOpen((v) => !v)}
             title={displayName}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
@@ -122,41 +161,7 @@ export function ChatHeader({
               <ChevronIcon open={menuOpen} className="h-3 w-3" />
             </span>
           </button>
-
-          {menuOpen && (
-            <div
-              role="menu"
-              className="absolute right-0 top-full z-40 mt-2 w-40 animate-fade-in overflow-hidden rounded-xl border border-night-600 bg-night-800 py-1 shadow-panel"
-            >
-              <div className="border-b border-night-700/60 px-3 pb-1.5 pt-1">
-                <p className="truncate text-xs font-medium text-ink">{displayName}</p>
-                <p className="truncate text-[11px] text-ink-faint">{user.email}</p>
-              </div>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onOpenSettings();
-                }}
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm text-ink-muted transition hover:bg-night-700/60 hover:text-ink"
-              >
-                <SettingsIcon />
-                {t('common.settings')}
-              </button>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onLogout();
-                }}
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm text-ink-muted transition hover:bg-cinnabar/10 hover:text-cinnabar-400"
-              >
-                <LogoutIcon />
-                {t('common.logout')}
-              </button>
-            </div>
-          )}
-        </div>
+        </Dropdown>
       </div>
     </header>
   );

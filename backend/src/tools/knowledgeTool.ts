@@ -18,9 +18,9 @@ export const knowledgeTools: OpenAITool[] = [
     function: {
       name: 'searchKnowledge',
       description:
-        '在用户本人的知识库中检索相关片段（用户上传的文档资料）。当问题与用户上传的文件/资料相关，' +
-        '或用户提到「根据文档 / 我上传的文件 / 资料里 / 这份材料」时调用。' +
-        'query 请填入能代表问题的关键术语，而不是整段寒暄。',
+        '在用户本人的知识库中做「向量 + 关键词」混合检索（用户上传的文档资料）。' +
+        '当问题与用户上传的文件/资料相关，或用户提到「根据文档 / 我上传的文件 / 资料里 / 这份材料」时调用。' +
+        'query 请填入能代表问题的关键术语或完整问题，而不是整段寒暄。',
       parameters: {
         type: 'object',
         properties: {
@@ -46,7 +46,7 @@ export const knowledgeExecutors: Record<
       return { error: '缺少参数：query（检索关键词）' };
     }
 
-    const hits = await searchKnowledge(ctx.userId, query);
+    const hits = await searchKnowledge(ctx.userId, query, 6);
     console.log(`[知识库] 用户 ${ctx.userId.slice(0, 8)} 检索「${query}」命中 ${hits.length} 段`);
 
     if (hits.length === 0) {
@@ -58,8 +58,13 @@ export const knowledgeExecutors: Record<
 
     return {
       found: hits.length,
+      retrieval: 'hybrid(vector+keyword)',
       results: hits.map((h) => ({
         file: h.filename,
+        chunk: h.chunkIndex,
+        match: h.matchType,
+        score: h.score,
+        vectorScore: h.vectorScore,
         snippet: h.content,
       })),
     };

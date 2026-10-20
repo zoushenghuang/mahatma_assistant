@@ -29,6 +29,27 @@ export const config = {
     ? path.resolve(process.env.UPLOAD_DIR)
     : path.join(backendRoot, 'data', 'uploads'),
 
+  /**
+   * 向量检索配置
+   *
+   * provider:
+   * - hash   本地特征哈希向量（零依赖，离线可用，但不是语义模型）
+   * - openai OpenAI 兼容的 /embeddings 接口（SiliconFlow、OpenAI、智谱等）
+   * - ollama 本地 Ollama（先 `ollama pull bge-m3`）
+   */
+  embedding: {
+    provider: (process.env.EMBEDDING_PROVIDER ?? 'hash').toLowerCase(),
+    model: process.env.EMBEDDING_MODEL ?? '',
+    baseUrl: process.env.EMBEDDING_BASE_URL ?? '',
+    apiKey: process.env.EMBEDDING_API_KEY ?? '',
+    /** 向量维度：hash 模式生效；openai/ollama 以接口返回为准 */
+    dim: Number(process.env.EMBEDDING_DIM ?? 1024),
+    batchSize: Number(process.env.EMBEDDING_BATCH_SIZE ?? 16),
+    timeoutMs: Number(process.env.EMBEDDING_TIMEOUT_MS ?? 30000),
+    /** 向量召回的最低余弦相似度 */
+    minScore: Number(process.env.EMBEDDING_MIN_SCORE ?? 0.2),
+  },
+
   // MySQL 连接配置（首次启动会自动建库建表）
   mysql: {
     host: process.env.MYSQL_HOST ?? '127.0.0.1',

@@ -1,4 +1,4 @@
-import mysql, { type Pool, type RowDataPacket } from 'mysql2/promise';
+import mysql, { type Pool, type PoolConnection, type RowDataPacket } from 'mysql2/promise';
 import { randomUUID } from 'node:crypto';
 import { config } from './config';
 import { decryptSecret, encryptSecret, generateToken, hashPassword, sha256 } from './crypto';
@@ -115,6 +115,9 @@ const DDL_DOCUMENTS = `
     text_content LONGTEXT    NULL,                -- 解析后的全文（供在线预览 / 全文搜索）
     text_length  INT         NOT NULL DEFAULT 0,  -- 全文字符数（列表展示用，避免读 LONGTEXT）
     storage_key  VARCHAR(255) NULL,               -- 原始文件在 uploads 目录下的文件名
+    embedding_model  VARCHAR(64) NULL,            -- 向量模型（null = 未建立向量索引）
+    embedding_dim    INT         NOT NULL DEFAULT 0,
+    embedded_chunks  INT         NOT NULL DEFAULT 0, -- 已向量化的切片数
     created_at  BIGINT       NOT NULL,
     PRIMARY KEY (id),
     KEY idx_documents_user (user_id, created_at),
@@ -131,6 +134,9 @@ const DDL_DOC_CHUNKS = `
     user_id     VARCHAR(36)  NOT NULL,
     chunk_index INT          NOT NULL,
     content     TEXT         NOT NULL,
+    embedding   MEDIUMBLOB   NULL,               -- Float32 小端向量
+    embedding_model VARCHAR(64) NULL,
+    embedding_dim   INT         NOT NULL DEFAULT 0,
     created_at  BIGINT       NOT NULL,
     PRIMARY KEY (id),
     KEY idx_chunks_document (document_id, chunk_index),
@@ -177,6 +183,8 @@ export async function initDb(): Promise<void> {
   }
   // 知识库预览：早期只存切片，补上全文 / 原文件字段（老文档仍可按切片回退预览）
   await migrateDocumentsPreview();
+  // 向量知识库：补上 embedding 相关字段（老数据需在界面上重建索引）
+  await migrateDocumentsVector();
 
   console.log(
     `[DB] MySQL 已就绪: ${config.mysql.user}@${config.mysql.host}:${config.mysql.port}/${config.mysql.database}`,
@@ -236,6 +244,42 @@ async function migrateDocumentsPreview(): Promise<void> {
   }
   if (!(await hasColumn('documents', 'storage_key'))) {
     await pool.query(`ALTER TABLE documents ADD COLUMN storage_key VARCHAR(255) NULL AFTER text_length`);
+  }
+}
+
+/**
+ * 迁移：向量知识库字段
+ * - doc_chunks.embedding：Float32 小端向量（MEDIUMBLOB）
+ * - documents.embedding_*：文档级索引状态（用于列表展示与重建）
+ */
+async function migrateDocumentsVector(): Promise<void> {
+  if (!(await hasColumn('doc_chunks', 'embedding'))) {
+    await pool.query(`ALTER TABLE doc_chunks ADD COLUMN embedding MEDIUMBLOB NULL AFTER content`);
+  }
+  if (!(await hasColumn('doc_chunks', 'embedding_model'))) {
+    await pool.query(
+      `ALTER TABLE doc_chunks ADD COLUMN embedding_model VARCHAR(64) NULL AFTER embedding`,
+    );
+  }
+  if (!(await hasColumn('doc_chunks', 'embedding_dim'))) {
+    await pool.query(
+      `ALTER TABLE doc_chunks ADD COLUMN embedding_dim INT NOT NULL DEFAULT 0 AFTER embedding_model`,
+    );
+  }
+  if (!(await hasColumn('documents', 'embedding_model'))) {
+    await pool.query(
+      `ALTER TABLE documents ADD COLUMN embedding_model VARCHAR(64) NULL AFTER storage_key`,
+    );
+  }
+  if (!(await hasColumn('documents', 'embedding_dim'))) {
+    await pool.query(
+      `ALTER TABLE documents ADD COLUMN embedding_dim INT NOT NULL DEFAULT 0 AFTER embedding_model`,
+    );
+  }
+  if (!(await hasColumn('documents', 'embedded_chunks'))) {
+    await pool.query(
+      `ALTER TABLE documents ADD COLUMN embedded_chunks INT NOT NULL DEFAULT 0 AFTER embedding_dim`,
+    );
   }
 }
 
@@ -659,6 +703,11 @@ export interface DocumentRow {
   textLength: number;
   /** 原始文件在 uploads 目录下的文件名（null = 早期文档，未保留原文件） */
   storageKey: string | null;
+  /** 向量模型（null = 尚未建立向量索引，只能关键词检索） */
+  embeddingModel: string | null;
+  embeddingDim: number;
+  /** 已向量化的切片数 */
+  embeddedChunks: number;
   createdAt: number;
 }
 
@@ -669,6 +718,10 @@ export interface ChunkRow {
   userId: string;
   chunkIndex: number;
   content: string;
+  /** Float32 小端向量（未向量化时为 null） */
+  embedding: Buffer | null;
+  embeddingModel: string | null;
+  embeddingDim: number;
   createdAt: number;
 }
 
@@ -688,6 +741,9 @@ type DocumentDbRow = RowDataPacket & {
   error: string | null;
   text_length: number;
   storage_key: string | null;
+  embedding_model: string | null;
+  embedding_dim: number;
+  embedded_chunks: number;
   created_at: number;
 };
 
@@ -697,6 +753,9 @@ type ChunkDbRow = RowDataPacket & {
   user_id: string;
   chunk_index: number;
   content: string;
+  embedding: Buffer | null;
+  embedding_model: string | null;
+  embedding_dim: number;
   created_at: number;
 };
 
@@ -712,6 +771,9 @@ function toDocumentRow(r: DocumentDbRow): DocumentRow {
     error: r.error ?? null,
     textLength: Number(r.text_length ?? 0),
     storageKey: r.storage_key ?? null,
+    embeddingModel: r.embedding_model ?? null,
+    embeddingDim: Number(r.embedding_dim ?? 0),
+    embeddedChunks: Number(r.embedded_chunks ?? 0),
     createdAt: Number(r.created_at),
   };
 }
@@ -744,28 +806,59 @@ export async function createDocument(input: {
     error: input.error ?? null,
     textLength: 0,
     storageKey: null,
+    embeddingModel: null,
+    embeddingDim: 0,
+    embeddedChunks: 0,
     createdAt: now,
   };
+}
+
+/** 一条待写入的切片（可带向量） */
+export interface ChunkInsert {
+  content: string;
+  embedding?: Buffer | null;
+}
+
+/** 向量元信息（模型 + 维度） */
+export interface EmbeddingMeta {
+  model: string | null;
+  dim: number;
+}
+
+/** 写入切片并带上向量（调用方负责事务） */
+async function writeChunks(
+  conn: PoolConnection,
+  documentId: string,
+  userId: string,
+  items: ChunkInsert[],
+  meta: EmbeddingMeta | undefined,
+  now: number,
+): Promise<void> {
+  const model = meta?.model ?? null;
+  const dim = meta?.dim ?? 0;
+  for (let i = 0; i < items.length; i++) {
+    await conn.query(
+      `INSERT INTO doc_chunks
+         (document_id, user_id, chunk_index, content, embedding, embedding_model, embedding_dim, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [documentId, userId, i, items[i].content, items[i].embedding ?? null, model, dim, now],
+    );
+  }
 }
 
 /** 批量写入分块（事务，避免只写一半） */
 export async function insertChunks(
   documentId: string,
   userId: string,
-  contents: string[],
+  items: ChunkInsert[],
+  meta?: EmbeddingMeta,
 ): Promise<void> {
-  if (contents.length === 0) return;
+  if (items.length === 0) return;
   const now = Date.now();
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    for (let i = 0; i < contents.length; i++) {
-      await conn.query(
-        `INSERT INTO doc_chunks (document_id, user_id, chunk_index, content, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [documentId, userId, i, contents[i], now],
-      );
-    }
+    await writeChunks(conn, documentId, userId, items, meta, now);
     await conn.commit();
   } catch (err) {
     await conn.rollback();
@@ -775,24 +868,68 @@ export async function insertChunks(
   }
 }
 
-/** 回填文档的解析结果（成功：chunkCount；失败：status=failed + error） */
+/**
+ * 重建某文档的切片（删除旧切片 → 写入新切片 + 新向量），事务保证原子性。
+ * 用于切换 embedding 模型后重建索引。
+ */
+export async function replaceChunks(
+  documentId: string,
+  userId: string,
+  items: ChunkInsert[],
+  meta?: EmbeddingMeta,
+): Promise<void> {
+  const now = Date.now();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(`DELETE FROM doc_chunks WHERE document_id = ? AND user_id = ?`, [
+      documentId,
+      userId,
+    ]);
+    await writeChunks(conn, documentId, userId, items, meta, now);
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/** 回填文档的解析/索引结果（失败时写 status=failed + error） */
 export async function finalizeDocument(
   id: string,
-  result: { chunkCount: number; status: string; error?: string | null },
+  result: {
+    chunkCount: number;
+    status: string;
+    error?: string | null;
+    embeddingModel?: string | null;
+    embeddingDim?: number;
+    embeddedChunks?: number;
+  },
 ): Promise<void> {
-  await pool.query(`UPDATE documents SET chunk_count = ?, status = ?, error = ? WHERE id = ?`, [
-    result.chunkCount,
-    result.status,
-    result.error ?? null,
-    id,
-  ]);
+  await pool.query(
+    `UPDATE documents
+       SET chunk_count = ?, status = ?, error = ?,
+           embedding_model = ?, embedding_dim = ?, embedded_chunks = ?
+     WHERE id = ?`,
+    [
+      result.chunkCount,
+      result.status,
+      result.error ?? null,
+      result.embeddingModel ?? null,
+      result.embeddingDim ?? 0,
+      result.embeddedChunks ?? 0,
+      id,
+    ],
+  );
 }
 
 /** 某用户的知识库文档列表（最新在前；不返回 LONGTEXT 全文） */
 export async function listDocuments(userId: string): Promise<DocumentRow[]> {
   const [rows] = await pool.query<DocumentDbRow[]>(
     `SELECT id, user_id, filename, mime, size, chunk_count, status, error,
-            text_length, storage_key, created_at
+            text_length, storage_key, embedding_model, embedding_dim, embedded_chunks, created_at
      FROM documents WHERE user_id = ? ORDER BY created_at DESC`,
     [userId],
   );
@@ -803,7 +940,7 @@ export async function listDocuments(userId: string): Promise<DocumentRow[]> {
 export async function getDocument(id: string, userId?: string): Promise<DocumentRow | undefined> {
   const [rows] = await pool.query<DocumentDbRow[]>(
     `SELECT id, user_id, filename, mime, size, chunk_count, status, error,
-            text_length, storage_key, created_at
+            text_length, storage_key, embedding_model, embedding_dim, embedded_chunks, created_at
      FROM documents WHERE id = ? ${userId ? 'AND user_id = ?' : ''}`,
     userId ? [id, userId] : [id],
   );
@@ -870,7 +1007,8 @@ export async function deleteDocument(id: string, userId: string): Promise<boolea
  */
 export async function getChunksByUser(userId: string, limit = 3000): Promise<ChunkWithSource[]> {
   const [rows] = await pool.query<(ChunkDbRow & { filename: string })[]>(
-    `SELECT c.id, c.document_id, c.user_id, c.chunk_index, c.content, c.created_at, d.filename
+    `SELECT c.id, c.document_id, c.user_id, c.chunk_index, c.content,
+            c.embedding, c.embedding_model, c.embedding_dim, c.created_at, d.filename
      FROM doc_chunks c
      JOIN documents d ON d.id = c.document_id
      WHERE c.user_id = ? AND d.status = 'ready'
@@ -884,6 +1022,9 @@ export async function getChunksByUser(userId: string, limit = 3000): Promise<Chu
     userId: r.user_id,
     chunkIndex: Number(r.chunk_index),
     content: r.content,
+    embedding: r.embedding ?? null,
+    embeddingModel: r.embedding_model ?? null,
+    embeddingDim: Number(r.embedding_dim ?? 0),
     createdAt: Number(r.created_at),
     filename: r.filename,
   }));

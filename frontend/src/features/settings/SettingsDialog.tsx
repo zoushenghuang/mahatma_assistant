@@ -7,6 +7,7 @@ import {
   PaletteIcon,
   SunIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { useSettings, type Theme } from './SettingsProvider';
 import type { Lang } from './i18n';
@@ -91,7 +92,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       layer="top"
       ariaLabel={t('settings.title')}
-      panelClassName="w-full max-w-md max-h-[85vh] animate-fade-up overflow-y-auto rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel"
+      width={448}
+      panelClassName="max-h-[85vh] w-full overflow-y-auto rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel"
     >
       {/* 标题 */}
       <div className="mb-5 flex items-start justify-between gap-4">
@@ -99,13 +101,13 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           <h2 className="font-display text-base font-bold text-gold-100">{t('settings.title')}</h2>
           <p className="mt-0.5 text-[11px] text-ink-faint">{t('settings.sub')}</p>
         </div>
-        <button
-          onClick={onClose}
+        <Button
+          variant="text"
+          size="small"
+          icon={<CloseIcon />}
           aria-label={t('common.close')}
-          className="cursor-pointer rounded-lg p-1.5 text-ink-muted transition hover:text-ink"
-        >
-          <CloseIcon />
-        </button>
+          onClick={onClose}
+        />
       </div>
 
       {/* 外观设置 */}

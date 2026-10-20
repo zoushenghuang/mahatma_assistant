@@ -1,6 +1,8 @@
+import { Alert, Input } from 'antd';
 import { useState } from 'react';
 import { api, setToken, type User } from '@/api';
-import { EyeIcon, StaffLogo } from '@/components/icons';
+import { StaffLogo } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { useSettings } from '@/features/settings/SettingsProvider';
 
 /**
@@ -13,9 +15,6 @@ import { useSettings } from '@/features/settings/SettingsProvider';
  */
 
 type Mode = 'login' | 'register' | 'forgot' | 'reset';
-
-const inputCls =
-  'w-full rounded-xl border border-night-600 bg-night-900/70 px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-faint focus:border-gold/60 focus:shadow-glow-gold-sm';
 
 function Field({
   label,
@@ -46,7 +45,6 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [resetToken, setResetToken] = useState('');
-  const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -136,12 +134,11 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
           {/* 账号 */}
           {mode !== 'reset' && (
             <Field label={t('auth.username')} hint={t('auth.usernameHint')}>
-              <input
+              <Input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoComplete="username"
                 placeholder={t('auth.usernamePlaceholder')}
-                className={inputCls}
                 required
               />
             </Field>
@@ -150,12 +147,11 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
           {/* 邮箱（找回密码时用于验证身份） */}
           {(mode === 'register' || mode === 'forgot') && (
             <Field label={t('auth.email')} hint={t('auth.emailHint')}>
-              <input
+              <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className={inputCls}
                 required
               />
             </Field>
@@ -164,11 +160,10 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
           {/* 昵称（仅注册） */}
           {mode === 'register' && (
             <Field label={t('auth.nickname')} hint={t('auth.nicknameHint')}>
-              <input
+              <Input
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
                 placeholder={t('auth.nicknamePlaceholder')}
-                className={inputCls}
               />
             </Field>
           )}
@@ -179,37 +174,23 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
               label={mode === 'reset' ? t('auth.newPassword') : t('auth.password')}
               hint={t('auth.passwordHint')}
             >
-              <div className="relative">
-                <input
-                  type={showPwd ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  placeholder={t('auth.passwordPlaceholder')}
-                  className={`${inputCls} pr-10`}
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPwd((v) => !v)}
-                  aria-label={showPwd ? t('auth.hidePassword') : t('auth.showPassword')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-md p-1.5 text-ink-faint transition hover:text-gold"
-                >
-                  <EyeIcon off={showPwd} />
-                </button>
-              </div>
+              <Input.Password
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                placeholder={t('auth.passwordPlaceholder')}
+                required
+              />
             </Field>
           )}
 
           {/* 确认密码 */}
           {(mode === 'register' || mode === 'reset') && (
             <Field label={t('auth.confirmPassword')}>
-              <input
-                type={showPwd ? 'text' : 'password'}
+              <Input.Password
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 placeholder={t('auth.confirmPlaceholder')}
-                className={inputCls}
                 required
               />
             </Field>
@@ -218,32 +199,27 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
           {/* 重置令牌（演示环境展示，便于直接复制） */}
           {mode === 'reset' && (
             <Field label={t('auth.resetToken')} hint={t('auth.resetTokenHint')}>
-              <input
+              <Input
                 value={resetToken}
                 onChange={(e) => setResetToken(e.target.value)}
                 placeholder={t('auth.resetTokenPlaceholder')}
-                className={`${inputCls} font-mono text-xs`}
+                className="font-mono"
                 required
               />
             </Field>
           )}
 
           {/* 提示 */}
-          {error && (
-            <p className="rounded-xl border border-cinnabar/40 bg-cinnabar/10 px-3 py-2 text-sm text-cinnabar-400">
-              {error}
-            </p>
-          )}
-          {notice && (
-            <p className="rounded-xl border border-gold/40 bg-gold/10 px-3 py-2 text-sm leading-relaxed text-gold-100">
-              {notice}
-            </p>
-          )}
+          {error && <Alert type="error" showIcon message={error} />}
+          {notice && <Alert type="success" showIcon message={notice} />}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full cursor-pointer rounded-xl bg-gold-gradient px-4 py-3 text-sm font-semibold text-accentInk transition hover:brightness-110 hover:shadow-glow-gold disabled:cursor-not-allowed disabled:opacity-50"
+          <Button
+            variant="primary"
+            htmlType="submit"
+            loading={loading}
+            block
+            size="large"
+            className="!font-semibold"
           >
             {loading
               ? t('auth.processing')
@@ -254,7 +230,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (user: User) => void 
                   : mode === 'forgot'
                     ? t('auth.verify')
                     : t('auth.submitReset')}
-          </button>
+          </Button>
 
           {/* 模式切换 */}
           <div className="flex items-center justify-between text-xs text-ink-muted">

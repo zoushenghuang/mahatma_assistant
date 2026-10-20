@@ -21,11 +21,12 @@ export default defineConfig({
     },
   },
   build: {
-    // 把稳定的第三方依赖拆成独立 chunk，避免主包过大、提升缓存命中率
+    // antd 体积较大，单独成 chunk，避免每次业务代码变更都让用户重新下载
+    chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
         manualChunks: {
-          react: ['react', 'react-dom'],
+          antd: ['antd'],
           markdown: ['react-markdown', 'remark-gfm', 'rehype-highlight', 'highlight.js'],
         },
       },

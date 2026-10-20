@@ -19,6 +19,7 @@ import {
   insertChunks,
   listDocuments,
   listSessions,
+  replaceChunks,
   saveDocumentContent,
   setUserApiKey,
   touchSession,
@@ -30,6 +31,7 @@ import {
 import { invalidateAgentCache } from './agent';
 import { isApiKeyRequired } from './llm';
 import { maskSecret } from './crypto';
+import { embedTexts, encodeVector, getEmbeddingRuntime } from './embedding';
 import { chunkText, docKind, extOf, extractText, mergeChunks } from './knowledge';
 import {
   AuthError,
@@ -311,6 +313,12 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // 重建全部文档的向量索引（切换 embedding 模型后使用）
+  if (req.method === 'POST' && url.pathname === '/api/documents/reindex') {
+    sendJson(res, 200, await reindexDocuments(user!));
+    return;
+  }
+
   // 文档切片（「切片」页签 / 排查检索效果）
   const docChunksMatch = url.pathname.match(/^\/api\/documents\/([\w-]+)\/chunks$/);
   if (req.method === 'GET' && docChunksMatch) {
@@ -546,6 +554,9 @@ function toDocDto(doc: DocumentRow) {
     textLength: doc.textLength,
     hasOriginal: Boolean(doc.storageKey),
     kind: docKind(doc.filename, doc.mime),
+    embeddingModel: doc.embeddingModel,
+    embeddingDim: doc.embeddingDim,
+    embeddedChunks: doc.embeddedChunks,
     createdAt: doc.createdAt,
   };
 }
@@ -630,6 +641,74 @@ async function sendDocumentFile(res: http.ServerResponse, userId: string, docume
 }
 
 /**
+ * 重建当前用户全部文档的向量索引。
+ * 切换 EMBEDDING_PROVIDER / EMBEDDING_MODEL 后调用，旧切片会被替换。
+ */
+async function reindexDocuments(user: UserRow) {
+  const runtime = getEmbeddingRuntime();
+  const docs = (await listDocuments(user.id)).filter(
+    (doc) => doc.status === 'ready' && doc.chunkCount > 0,
+  );
+
+  let updated = 0;
+  let failed = 0;
+  let totalChunks = 0;
+  const errors: string[] = [];
+
+  for (const doc of docs) {
+    try {
+      const text = await resolveDocumentText(doc, user.id);
+      const chunks = chunkText(text);
+      if (chunks.length === 0) {
+        failed += 1;
+        errors.push(`${doc.filename}: 没有可重建的文本内容`);
+        continue;
+      }
+
+      const vectors = await embedTexts(chunks);
+      const dim = vectors[0]?.length ?? 0;
+
+      await replaceChunks(
+        doc.id,
+        user.id,
+        chunks.map((content, i) => ({ content, embedding: encodeVector(vectors[i]) })),
+        { model: runtime.model, dim },
+      );
+      await finalizeDocument(doc.id, {
+        chunkCount: chunks.length,
+        status: 'ready',
+        embeddingModel: runtime.model,
+        embeddingDim: dim,
+        embeddedChunks: vectors.length,
+      });
+
+      updated += 1;
+      totalChunks += chunks.length;
+    } catch (err) {
+      failed += 1;
+      const message = (err as Error)?.message ?? String(err);
+      errors.push(`${doc.filename}: ${message}`);
+      console.error(`[知识库] 重建《${doc.filename}》向量索引失败: ${message}`);
+    }
+  }
+
+  console.log(
+    `[知识库] 用户 ${user.username} 重建向量索引：${updated}/${docs.length} 份，${totalChunks} 个切片（${runtime.provider}/${runtime.model}）`,
+  );
+
+  return {
+    total: docs.length,
+    updated,
+    failed,
+    chunks: totalChunks,
+    provider: runtime.provider,
+    model: runtime.model,
+    semantic: runtime.semantic,
+    errors: errors.slice(0, 5),
+  };
+}
+
+/**
  * 处理文档上传：先落库记录 → 保存原文件 → 解析 / 分块 / 回填状态。
  * 解析失败也返回 200 + status='failed'，让前端展示失败原因，而不是整请求报错；
  * 此时原文件仍会保留，用户可以打开排查（如扫描件 PDF）。
@@ -675,11 +754,38 @@ async function handleUpload(user: UserRow, body: any) {
     const chunks = chunkText(text);
     if (chunks.length === 0) throw new Error('未能从文件中解析出文本内容（可能是空文件或扫描件）');
 
-    await insertChunks(doc.id, user.id, chunks);
+    // 向量化：失败时不影响文档可用性，自动降级为关键词检索
+    let vectors: Buffer[] = [];
+    let embeddingModel: string | null = null;
+    let embeddingDim = 0;
+    try {
+      const runtime = getEmbeddingRuntime();
+      const list = await embedTexts(chunks);
+      vectors = list.map(encodeVector);
+      embeddingModel = runtime.model;
+      embeddingDim = list[0]?.length ?? 0;
+    } catch (err) {
+      console.warn(
+        `[知识库] 向量化失败，文档将以关键词模式检索: ${(err as Error)?.message ?? err}`,
+      );
+    }
+
+    await insertChunks(
+      doc.id,
+      user.id,
+      chunks.map((content, i) => ({ content, embedding: vectors[i] ?? null })),
+      embeddingModel ? { model: embeddingModel, dim: embeddingDim } : undefined,
+    );
     await saveDocumentContent(doc.id, text, storedKey);
-    await finalizeDocument(doc.id, { chunkCount: chunks.length, status: 'ready' });
+    await finalizeDocument(doc.id, {
+      chunkCount: chunks.length,
+      status: 'ready',
+      embeddingModel,
+      embeddingDim,
+      embeddedChunks: vectors.length,
+    });
     console.log(
-      `[知识库] 用户 ${user.username} 上传《${filename}》，${text.length} 字，切分为 ${chunks.length} 块`,
+      `[知识库] 用户 ${user.username} 上传《${filename}》，${text.length} 字，切分为 ${chunks.length} 块，向量 ${vectors.length} 条（${embeddingModel ?? '未索引'}）`,
     );
     return toDocDto({
       ...doc,
@@ -688,6 +794,9 @@ async function handleUpload(user: UserRow, body: any) {
       error: null,
       textLength: text.length,
       storageKey: storedKey,
+      embeddingModel,
+      embeddingDim,
+      embeddedChunks: vectors.length,
     });
   } catch (err: any) {
     const message = err?.message ?? '解析失败';

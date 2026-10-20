@@ -60,7 +60,24 @@ export interface KnowledgeDoc {
   /** 是否保留了原始文件（旧文档可能没有） */
   hasOriginal: boolean;
   kind: DocKind;
+  /** 向量模型（null = 未建立向量索引，只能关键词检索） */
+  embeddingModel: string | null;
+  embeddingDim: number;
+  /** 已向量化的切片数 */
+  embeddedChunks: number;
   createdAt: number;
+}
+
+/** 重建向量索引的结果 */
+export interface ReindexResult {
+  total: number;
+  updated: number;
+  failed: number;
+  chunks: number;
+  provider: string;
+  model: string;
+  semantic: boolean;
+  errors: string[];
 }
 
 /** 文档详情：元信息 + 全文（超长时截断） */

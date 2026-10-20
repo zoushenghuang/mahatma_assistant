@@ -1,4 +1,6 @@
+import { Input } from 'antd';
 import { EditIcon, RefreshIcon, StaffLogo } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import Markdown from './Markdown';
@@ -36,31 +38,26 @@ export function MessageList({
             /* 编辑态：就地修改，保存后丢弃后续对话并重发 */
             <div key={i} className="flex animate-fade-up justify-end">
               <div className="w-full max-w-[85%] rounded-2xl border border-gold/40 bg-night-800 p-2.5 shadow-glow-gold-sm">
-                <textarea
+                <Input.TextArea
                   value={editText}
                   onChange={(e) => onEditTextChange(e.target.value)}
-                  rows={Math.min(10, Math.max(2, editText.split('\n').length))}
+                  autoSize={{ minRows: 2, maxRows: 10 }}
                   autoFocus
-                  className="w-full resize-none rounded-xl border border-night-600 bg-night-900/70 px-3 py-2 text-sm leading-relaxed text-ink outline-none transition focus:border-gold/60"
                 />
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                   <span className="text-[11px] text-ink-faint">{t('chat.editHint')}</span>
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={onCancelEdit}
-                      className="cursor-pointer rounded-lg border border-night-600 px-3 py-1.5 text-xs text-ink-muted transition hover:text-ink"
-                    >
+                    <Button size="small" onClick={onCancelEdit}>
                       {t('chat.cancel')}
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="small"
                       onClick={() => onSubmitEdit(i)}
                       disabled={!editText.trim()}
-                      className="cursor-pointer rounded-lg bg-gold-gradient px-3 py-1.5 text-xs font-medium text-accentInk transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {t('chat.saveAndResend')}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>

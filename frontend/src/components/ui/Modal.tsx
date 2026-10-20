@@ -1,23 +1,29 @@
-import { useEffect, type ReactNode } from 'react';
+import { Modal as AntModal } from 'antd';
+import type { ReactNode } from 'react';
 
 /**
- * 通用弹窗外壳：遮罩 + 居中面板 + Esc 关闭 + 层级控制。
- * 业务弹窗只负责面板内容与尺寸，不再各自重复实现遮罩逻辑。
+ * 通用弹窗外壳（基于 antd Modal）
+ *
+ * 只保留项目需要的 props，内部把 antd 默认的 header / footer / padding 清空，
+ * 面板视觉仍由各业务组件的 panelClassName 控制；
+ * 焦点管理、Esc、遮罩、滚动锁定、层级由 antd 负责。
  */
+/** 默认面板视觉：antd 的 content 已清空背景，这里兜底，避免调用方漏传 panelClassName 出现透明弹窗 */
+const DEFAULT_PANEL = 'w-full rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel';
+
 export interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   ariaLabel?: string;
-  /** base = z-50（常规弹窗），top = z-[60]（覆盖在其他弹窗之上） */
+  /** base = 常规弹窗，top = 覆盖在其他弹窗之上 */
   layer?: 'base' | 'top';
+  /** 面板样式（尺寸以外的视觉样式） */
   panelClassName?: string;
+  /** 弹窗宽度（默认 480） */
+  width?: number | string;
   closeOnEscape?: boolean;
   closeOnBackdrop?: boolean;
-  backdropClassName?: string;
 }
-
-const DEFAULT_PANEL =
-  'w-full max-w-md animate-fade-up rounded-2xl border border-night-600 bg-night-800 p-6 shadow-panel';
 
 export function Modal({
   onClose,
@@ -25,39 +31,36 @@ export function Modal({
   ariaLabel,
   layer = 'base',
   panelClassName = DEFAULT_PANEL,
+  width = 480,
   closeOnEscape = true,
   closeOnBackdrop = true,
-  backdropClassName = 'bg-black/70',
 }: ModalProps) {
-  useEffect(() => {
-    if (!closeOnEscape) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, closeOnEscape]);
-
   return (
-    <div
-      className={`fixed inset-0 flex items-center justify-center p-4 ${
-        layer === 'top' ? 'z-[60]' : 'z-50'
-      }`}
+    <AntModal
+      open
+      onCancel={onClose}
+      footer={null}
+      closable={false}
+      centered
+      width={width}
+      maskClosable={closeOnBackdrop}
+      keyboard={closeOnEscape}
+      zIndex={layer === 'top' ? 1200 : 1100}
+      title={ariaLabel ? <span className="sr-only">{ariaLabel}</span> : undefined}
+      styles={{
+        content: { padding: 0, background: 'transparent', boxShadow: 'none' },
+        body: { padding: 0 },
+        header: {
+          padding: 0,
+          margin: 0,
+          minHeight: 0,
+          borderBottom: 'none',
+          background: 'transparent',
+        },
+        mask: { background: 'rgba(0, 0, 0, 0.72)' },
+      }}
     >
-      <div
-        className={`absolute inset-0 ${backdropClassName}`}
-        onClick={() => {
-          if (closeOnBackdrop) onClose();
-        }}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={ariaLabel}
-        className={`relative z-10 ${panelClassName}`}
-      >
-        {children}
-      </div>
-    </div>
+      <div className={`w-full ${panelClassName}`}>{children}</div>
+    </AntModal>
   );
 }

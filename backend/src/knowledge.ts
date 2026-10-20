@@ -1,16 +1,24 @@
 import { createRequire } from 'node:module';
+import { config } from './config';
 import { getChunksByUser, type ChunkWithSource } from './db';
+import {
+  cosineSimilarity,
+  decodeVector,
+  embedQuery,
+  rrfScore,
+} from './embedding';
 
 /**
- * 轻量 RAG 引擎（关键词检索 + 内存打分）
+ * RAG 检索引擎（向量 + 关键词混合召回）
  *
- * 为什么不上向量库：
- * - 本项目按「用户自带 DeepSeek Key」运行，而 DeepSeek 暂不提供 embedding 接口，
- *   无法稳定地为每个用户生成向量；
- * - 学习 Demo 更关注「上传 → 切块 → 检索 → 注入模型」这条主链路是否清晰可讲，
- *   因此这里用一套**不依赖任何外部服务**的关键词检索：
- *   中文按 2-gram 切词、英文按单词切词，命中词频 + 词多样性 + 长度归一化打分，
- *   效果足够支撑「根据我的文档回答」这类场景。
+ * 链路：
+ * 1. 文档切片时同步生成 embedding，与文本一起存入 MySQL（doc_chunks.embedding）
+ * 2. 查询时生成 query 向量，对当前用户的切片做余弦相似度召回
+ * 3. 同时保留原有的关键词打分（中文 2-gram / 英文分词），用 RRF 融合两路排名
+ *
+ * 为什么保留关键词：
+ * - 合同编号、错误码、专有名词等「字面精确匹配」场景关键词更稳；
+ * - embedding 服务不可用时自动降级，不影响对话主流程。
  *
  * 关键节点：RAG —— 文档切片（chunk）是检索的最小单元，
  * 检索命中的片段会作为工具结果回填给模型，由模型组织成最终回答。
@@ -243,33 +251,113 @@ export function scoreChunk(content: string, terms: string[]): number {
 export interface KnowledgeHit {
   filename: string;
   chunkIndex: number;
+  /** RRF 融合分（越大越相关） */
   score: number;
+  vectorScore: number;
+  keywordScore: number;
+  matchType: 'vector' | 'keyword' | 'hybrid';
   content: string;
 }
 
+/** 按分数降序返回命中的下标（过滤掉不满足阈值的） */
+function rankIndices(scores: number[], accept: (score: number) => boolean): number[] {
+  return scores
+    .map((score, index) => ({ score, index }))
+    .filter((item) => accept(item.score))
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.index);
+}
+
 /**
- * 在某用户的知识库中检索最相关的若干片段。
+ * 在某用户的知识库中做混合检索（向量 + 关键词，RRF 融合）。
  * 数据按 user_id 严格隔离，绝不会召回其他用户的文档。
  */
 export async function searchKnowledge(
   userId: string,
   query: string,
-  topK = 4,
+  topK = 6,
 ): Promise<KnowledgeHit[]> {
-  const terms = extractTerms(query);
-  if (terms.length === 0) return [];
-
   const chunks: ChunkWithSource[] = await getChunksByUser(userId);
+  if (chunks.length === 0) return [];
 
-  return chunks
-    .map((c) => ({ chunk: c, score: scoreChunk(c.content, terms) }))
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
+  // 1) 关键词路：原有 2-gram / 分词打分
+  const terms = extractTerms(query);
+  const keywordScores = chunks.map((chunk) =>
+    terms.length > 0 ? scoreChunk(chunk.content, terms) : 0,
+  );
+
+  // 2) 向量路：查询向量化失败时自动降级
+  let queryVector: number[] | null = null;
+  let vectorModel: string | null = null;
+  let vectorSemantic = false;
+  try {
+    const embedded = await embedQuery(query);
+    if (embedded) {
+      queryVector = embedded.vector;
+      vectorModel = embedded.model;
+      vectorSemantic = embedded.semantic;
+    }
+  } catch (err) {
+    console.warn(
+      `[知识库] 查询向量化失败，本次降级为关键词检索: ${(err as Error)?.message ?? err}`,
+    );
+  }
+
+  const vectorScores = queryVector
+    ? chunks.map((chunk) => {
+        if (!chunk.embedding || !vectorModel || chunk.embeddingModel !== vectorModel) return 0;
+        if (chunk.embeddingDim !== queryVector!.length) return 0;
+        const vector = decodeVector(chunk.embedding);
+        return vector ? cosineSimilarity(queryVector!, vector) : 0;
+      })
+    : null;
+
+  // 3) 两路排名 → RRF 融合
+  // 语义模型用配置阈值过滤噪声；本地哈希向量整体分偏低，阈值放宽
+  const vectorThreshold = vectorSemantic
+    ? config.embedding.minScore
+    : Math.min(config.embedding.minScore, 0.05);
+  const keywordRanked = rankIndices(keywordScores, (score) => score > 0);
+  const vectorRanked = vectorScores
+    ? rankIndices(vectorScores, (score) => score >= vectorThreshold)
+    : [];
+
+  if (keywordRanked.length === 0 && vectorRanked.length === 0) return [];
+
+  const fused = new Map<number, { score: number; keyword: number; vector: number }>();
+  const add = (index: number, score: number, kind: 'keyword' | 'vector') => {
+    const item = fused.get(index) ?? { score: 0, keyword: 0, vector: 0 };
+    item.score += score;
+    item[kind] += score;
+    fused.set(index, item);
+  };
+  keywordRanked.forEach((index, rank) => add(index, rrfScore(rank), 'keyword'));
+  vectorRanked.forEach((index, rank) => add(index, rrfScore(rank), 'vector'));
+
+  console.log(
+    `[知识库] 检索「${query.slice(0, 30)}」关键词命中 ${keywordRanked.length} 段，` +
+      `向量命中 ${vectorRanked.length} 段（阈值 ${vectorThreshold}），融合 ${Math.min(fused.size, topK)} 段`,
+  );
+
+  return [...fused.entries()]
+    .sort((a, b) => b[1].score - a[1].score)
     .slice(0, topK)
-    .map((x) => ({
-      filename: x.chunk.filename,
-      chunkIndex: x.chunk.chunkIndex,
-      score: Number(x.score.toFixed(4)),
-      content: x.chunk.content,
-    }));
+    .map(([index, item]) => {
+      const chunk = chunks[index];
+      const matchType =
+        item.keyword > 0 && item.vector > 0
+          ? ('hybrid' as const)
+          : item.vector > 0
+            ? ('vector' as const)
+            : ('keyword' as const);
+      return {
+        filename: chunk.filename,
+        chunkIndex: chunk.chunkIndex,
+        score: Number(item.score.toFixed(6)),
+        vectorScore: Number((vectorScores?.[index] ?? 0).toFixed(4)),
+        keywordScore: Number(keywordScores[index].toFixed(4)),
+        matchType,
+        content: chunk.content,
+      };
+    });
 }
